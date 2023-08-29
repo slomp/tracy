@@ -57,13 +57,16 @@ class D3D11Ctx
     enum CollectMode { POLL, BLOCK };
 
 public:
-    D3D11Ctx( ID3D11Device* device, ID3D11DeviceContext* devicectx )
+    D3D11Ctx( ID3D11Device* device )
     {
-        // TODO: consider calling ID3D11Device::GetImmediateContext() instead of passing it as an argument
         m_device = device;
         device->AddRef();
-        m_immediateDevCtx = devicectx;
-        devicectx->AddRef();
+
+        m_device->GetImmediateContext(&m_immediateDevCtx);
+        if (m_immediateDevCtx == nullptr)
+        {
+            TracyD3D11Panic("unable to obtain device immediate context.", return);
+        }
 
         {
             D3D11_QUERY_DESC desc = { };
@@ -176,6 +179,15 @@ public:
     {
         ZoneScopedC( Color::Red4 );
 
+        // Only one thread is allowed to use the immediate context (and as such, collect
+        // timestamps) at any given time but there's no need to block contending threads
+        if (!m_collectionMutex.try_lock())
+        {
+            return;
+        }
+
+        std::unique_lock lock (m_collectionMutex, std::adopt_lock);
+
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() )
         {
@@ -186,6 +198,12 @@ public:
 
         if (m_previousCheckpoint == m_nextCheckpoint)
         {
+            // #WARN: there's the possibility of a subtle race condition here:
+            // even though NextQueryId() generates ids atomically, the corresponding timestamp
+            // query command is only issued a few lines later; meanwhile, if Collect() happens
+            // to be running in parallel with NextQueryId(), it may end up updating the check-
+            // point with a query counter value that is yet to be placed in a deferred context
+            // to be submitted for execution...
             uintptr_t nextCheckpoint = m_queryCounter;
             if (nextCheckpoint == m_nextCheckpoint)
             {
@@ -213,7 +231,7 @@ public:
             return;
         }
 
-        auto begin = m_previousCheckpoint;
+        auto begin = m_previousCheckpoint.load();
         auto end = m_nextCheckpoint;
         for (auto i = begin; i != end; ++i)
         {
@@ -255,7 +273,7 @@ private:
 
     tracy_force_inline uint32_t NextQueryId()
     {
-        auto id = m_queryCounter++;
+        auto id = m_queryCounter.fetch_add(1);;
         if (RingCount(m_previousCheckpoint, id) >= MaxQueries)
         {
             TracyD3D11Panic("too many pending timestamp queries.");
@@ -289,17 +307,21 @@ private:
 
     uint8_t m_contextId = 255;  // NOTE: apparently, 255 means invalid id; is this documented anywhere?
 
-    uintptr_t m_queryCounter = 0;
+    using atomic_counter = std::atomic<uintptr_t>;
+    static_assert(atomic_counter::is_always_lock_free);
+    atomic_counter m_queryCounter = 0;
 
-    uintptr_t m_previousCheckpoint = 0;
-    uintptr_t m_nextCheckpoint = 0;
+    atomic_counter m_previousCheckpoint = 0;
+    atomic_counter::value_type m_nextCheckpoint = 0;
+
+    std::mutex m_collectionMutex;
 };
 
 class D3D11ZoneScope
 {
 public:
-    tracy_force_inline D3D11ZoneScope( D3D11Ctx* ctx, const SourceLocationData* srcloc, bool active )
-        : D3D11ZoneScope(ctx, active)
+    tracy_force_inline D3D11ZoneScope( D3D11Ctx* ctx, ID3D11DeviceContext* devCtx, const SourceLocationData* srcloc, bool active )
+        : D3D11ZoneScope(ctx, devCtx, active)
     {
         if( !m_active ) return;
 
@@ -307,8 +329,8 @@ public:
         WriteQueueItem(item, QueueType::GpuZoneBeginSerial, reinterpret_cast<uint64_t>(srcloc));
     }
 
-    tracy_force_inline D3D11ZoneScope( D3D11Ctx* ctx, const SourceLocationData* srcloc, int depth, bool active )
-        : D3D11ZoneScope(ctx, active)
+    tracy_force_inline D3D11ZoneScope( D3D11Ctx* ctx, ID3D11DeviceContext* devCtx, const SourceLocationData* srcloc, int depth, bool active )
+        : D3D11ZoneScope(ctx, devCtx, active)
     {
         if( !m_active ) return;
 
@@ -316,8 +338,8 @@ public:
         WriteQueueItem(item, QueueType::GpuZoneBeginCallstackSerial, reinterpret_cast<uint64_t>(srcloc));
     }
 
-    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz, bool active)
-        : D3D11ZoneScope(ctx, active)
+    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, ID3D11DeviceContext* devCtx, uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz, bool active)
+        : D3D11ZoneScope(ctx, devCtx, active)
     {
         if( !m_active ) return;
 
@@ -327,8 +349,8 @@ public:
         WriteQueueItem(item, QueueType::GpuZoneBeginAllocSrcLocSerial, sourceLocation);
     }
 
-    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz, int depth, bool active)
-        : D3D11ZoneScope(ctx, active)
+    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, ID3D11DeviceContext* devCtx, uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz, int depth, bool active)
+        : D3D11ZoneScope(ctx, devCtx, active)
     {
         if( !m_active ) return;
 
@@ -338,12 +360,24 @@ public:
         WriteQueueItem(item, QueueType::GpuZoneBeginAllocSrcLocCallstackSerial, sourceLocation);
     }
 
+    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, const SourceLocationData* srcloc, bool active)
+        : D3D11ZoneScope(ctx, ctx->m_immediateDevCtx, srcloc, active) { }
+
+    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, const SourceLocationData* srcloc, int depth, bool active)
+        : D3D11ZoneScope(ctx, ctx->m_immediateDevCtx, srcloc, depth, active) { }
+
+    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz, bool active)
+        : D3D11ZoneScope(ctx, ctx->m_immediateDevCtx, line, source, sourceSz, function, functionSz, name, nameSz, active) { }
+
+    tracy_force_inline D3D11ZoneScope(D3D11Ctx* ctx, uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz, int depth, bool active)
+        : D3D11ZoneScope(ctx, ctx->m_immediateDevCtx, line, source, sourceSz, function, functionSz, name, nameSz, depth, active) { }
+
     tracy_force_inline ~D3D11ZoneScope()
     {
         if( !m_active ) return;
 
         const auto queryId = m_ctx->NextQueryId();
-        m_ctx->m_immediateDevCtx->End(m_ctx->GetQueryObjectFromId(queryId));
+        m_devCtx->End(m_ctx->GetQueryObjectFromId(queryId));
 
         auto* item = Profiler::QueueSerial();
         MemWrite( &item->hdr.type, QueueType::GpuZoneEndSerial );
@@ -355,7 +389,7 @@ public:
     }
 
 private:
-    tracy_force_inline D3D11ZoneScope( D3D11Ctx* ctx, bool active )
+    tracy_force_inline D3D11ZoneScope( D3D11Ctx* ctx, ID3D11DeviceContext* devCtx, bool active )
 #ifdef TRACY_ON_DEMAND
         : m_active( is_active && GetProfiler().IsConnected() )
 #else
@@ -364,12 +398,13 @@ private:
     {
         if( !m_active ) return;
         m_ctx = ctx;
+        m_devCtx = devCtx;
     }
 
     void WriteQueueItem(tracy::QueueItem* item, tracy::QueueType queueItemType, uint64_t sourceLocation)
     {
         const auto queryId = m_ctx->NextQueryId();
-        m_ctx->m_immediateDevCtx->End(m_ctx->GetQueryObjectFromId(queryId));
+        m_devCtx->End(m_ctx->GetQueryObjectFromId(queryId));
 
         MemWrite( &item->hdr.type, queueItemType);
         MemWrite( &item->gpuZoneBegin.cpuTime, Profiler::GetTime() );
@@ -383,12 +418,13 @@ private:
     const bool m_active;
 
     D3D11Ctx* m_ctx;
+    ID3D11DeviceContext* m_devCtx;
 };
 
-static inline D3D11Ctx* CreateD3D11Context( ID3D11Device* device, ID3D11DeviceContext* devicectx )
+static inline D3D11Ctx* CreateD3D11Context( ID3D11Device* device )
 {
     auto ctx = (D3D11Ctx*)tracy_malloc( sizeof( D3D11Ctx ) );
-    new(ctx) D3D11Ctx( device, devicectx );
+    new (ctx) D3D11Ctx( device );
     return ctx;
 }
 
@@ -403,7 +439,7 @@ static inline void DestroyD3D11Context( D3D11Ctx* ctx )
 
 using TracyD3D11Ctx = tracy::D3D11Ctx*;
 
-#define TracyD3D11Context( device, devicectx ) tracy::CreateD3D11Context( device, devicectx );
+#define TracyD3D11Context( device ) tracy::CreateD3D11Context( device );
 #define TracyD3D11Destroy(ctx) tracy::DestroyD3D11Context(ctx);
 #define TracyD3D11ContextName(ctx, name, size) ctx->Name(name, size);
 
