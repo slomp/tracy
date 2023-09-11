@@ -7,8 +7,6 @@
 #define TracyD3D12Destroy(ctx)
 #define TracyD3D12ContextName(ctx, name, size)
 
-#define TracyD3D12NewFrame(ctx)
-
 #define TracyD3D12Zone(ctx, cmdList, name)
 #define TracyD3D12ZoneC(ctx, cmdList, name, color)
 #define TracyD3D12NamedZone(ctx, varname, cmdList, name, active)
@@ -40,40 +38,30 @@ using TracyD3D12Ctx = void*;
 #include <cassert>
 #include <d3d12.h>
 #include <dxgi.h>
-#include <queue>
 
 #define TracyD3D12Panic(msg) assert(false && "TracyD3D12: " msg); TracyMessageLC("TracyD3D12: " msg, tracy::Color::Red4);
 
 namespace tracy
 {
 
-    struct D3D12QueryPayload
-    {
-        uint32_t m_queryIdStart = 0;
-        uint32_t m_queryCount = 0;
-    };
-
     // Command queue context.
     class D3D12QueueCtx
     {
         friend class D3D12ZoneScope;
 
-        static constexpr uint32_t MaxQueries = 64 * 1024;  // Queries are begin and end markers, so we can store half as many total time durations. Must be even!
-
         ID3D12Device* m_device = nullptr;
         ID3D12CommandQueue* m_queue = nullptr;
         uint8_t m_contextId = 255;  // TODO: apparently, 255 means "invalid id"; is this documented somewhere?
-        ID3D12QueryHeap* m_queryHeap;
-        ID3D12Resource* m_readbackBuffer;
+        ID3D12QueryHeap* m_queryHeap = nullptr;
+        ID3D12Resource* m_readbackBuffer = nullptr;
 
-        // In-progress payload.
-        uint32_t m_queryLimit = MaxQueries;
-        std::atomic<uint32_t> m_queryCounter = 0;
-        uint32_t m_previousQueryCounter = 0;
+        static_assert(std::atomic<UINT64>::is_always_lock_free);
+        std::atomic<UINT64> m_queryCounter = 0;
+        uint32_t m_queryLimit = 0;
 
-        uint32_t m_activePayload = 0;
-        ID3D12Fence* m_payloadFence;
-        std::queue<D3D12QueryPayload> m_payloadQueue;
+        ID3D12Fence* m_fenceCheckpoint = nullptr;
+        std::atomic<UINT64> m_previousCheckpoint = 0;
+        UINT64 m_nextCheckpoint = 0;
 
         UINT64 m_prevCalibrationTicksCPU = 0;
 
@@ -143,6 +131,9 @@ namespace tracy
                 assert(Success && featureData.CopyQueueTimestampQueriesSupported && "Platform does not support profiling of copy queues.");
             }
 
+            static constexpr uint32_t MaxQueries = 64 * 1024;  // Must be even, because queries are (begin, end) pairs
+            m_queryLimit = MaxQueries;
+
             D3D12_QUERY_HEAP_DESC heapDesc{};
             heapDesc.Type = queue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_COPY ? D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP : D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
             heapDesc.Count = m_queryLimit;
@@ -176,12 +167,13 @@ namespace tracy
             readbackHeapProps.CreationNodeMask = 0;
             readbackHeapProps.VisibleNodeMask = 0;  // #TODO: Support multiple adapters.
 
+            // readback buffer will be initialized with zeroes (unless D3D12_HEAP_FLAG_CREATE_NOT_ZEROED)
             if (FAILED(device->CreateCommittedResource(&readbackHeapProps, D3D12_HEAP_FLAG_NONE, &readbackBufferDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_readbackBuffer))))
             {
                 assert(false && "Failed to create query readback buffer.");
             }
 
-            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_payloadFence))))
+            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fenceCheckpoint))))
             {
                 assert(false && "Failed to create payload fence.");
             }
@@ -230,23 +222,9 @@ namespace tracy
 
         ~D3D12QueueCtx()
         {
-            m_payloadFence->Release();
+            m_fenceCheckpoint->Release();
             m_readbackBuffer->Release();
             m_queryHeap->Release();
-        }
-
-        void NewFrame()
-        {
-            uint32_t queryCounter = m_queryCounter.exchange(0);
-            m_payloadQueue.emplace(D3D12QueryPayload{ m_previousQueryCounter, queryCounter });
-            m_previousQueryCounter += queryCounter;
-
-            if (m_previousQueryCounter >= m_queryLimit)
-            {
-                m_previousQueryCounter -= m_queryLimit;
-            }
-
-            m_queue->Signal(m_payloadFence, ++m_activePayload);
         }
 
         void Name( const char* name, uint16_t len )
@@ -269,8 +247,6 @@ namespace tracy
 #ifdef TRACY_ON_DEMAND
             if (!GetProfiler().IsConnected())
             {
-                m_queryCounter = 0;
-
                 return;
             }
 #endif
@@ -279,49 +255,88 @@ namespace tracy
             const auto newestReadyPayload = m_payloadFence->GetCompletedValue();
             const auto payloadCount = m_payloadQueue.size() - (m_activePayload - newestReadyPayload);
 
-            if (!payloadCount)
+            UINT64 begin = m_previousCheckpoint.load();
+            UINT64 latestCheckpoint = m_fenceCheckpoint->GetCompletedValue();
+            uint32_t count = RingCount(begin, latestCheckpoint);
+
+            if (count == 0)   // no pending timestamp queries
             {
-                return;  // No payloads are available yet, exit out.
+                // #WARN: there's the possibility of a subtle race condition here:
+                // even though NextQueryId() generates ids atomically, the matching timestamp query
+                // command associated with an id is only placed into a command list a few lines later;
+                // meanwhile, if Collect() happens to be running in parallel with NextQueryId(), it may
+                // end up updating the checkpoint (and fence) with a query counter value that is yet to
+                // be placed into a command list and submitted for execution... (that said, this should
+                // not lead to issues because Collect() attempts to detect unresolved timestamp queries
+                // and will defer the collection of such queries to subsequent calls)
+                UINT64 nextCheckpoint = m_queryCounter.load();
+                if (nextCheckpoint != latestCheckpoint)
+                {
+                    // safe to call Signal at any time: D3D12 command queues perform internal locking
+                    m_queue->Signal(m_fenceCheckpoint, nextCheckpoint);
+                }
+                return;
             }
 
+            if ((count % 2) != 0)   // paranoid check
+            {
             D3D12_RANGE mapRange{ 0, m_queryLimit * sizeof(uint64_t) };
+                return;
+            }
 
-            // Map the readback buffer so we can fetch the query data from the GPU.
-            void* readbackBufferMapping = nullptr;
-
-            if (FAILED(m_readbackBuffer->Map(0, &mapRange, &readbackBufferMapping)))
+            if (count >= m_queryLimit)
             {
                 assert(false && "Failed to map readback buffer.");
+                return;
             }
 
-            auto* timestampData = static_cast<uint64_t*>(readbackBufferMapping);
-
-            for (uint32_t i = 0; i < payloadCount; ++i)
+            // technically, the timestamp buffer could be persistently mapped
+            UINT64* timestamps = [&]()
             {
-                const auto& payload = m_payloadQueue.front();
+                void* rawbytes = nullptr;
+                // #TODO: map only the [begin, end) range;
+                // (may require multiple mapping due to circular buffer wrap-around)
+                D3D12_RANGE mapRange { 0, m_queryLimit * sizeof(UINT64) };
+                m_readbackBuffer->Map(0, &mapRange, &rawbytes);
+                return static_cast<UINT64*>(rawbytes);
+            }();
 
-                for (uint32_t j = 0; j < payload.m_queryCount; ++j)
-                {
+            if (timestamps == nullptr)
+            {
                     const auto counter = (payload.m_queryIdStart + j) % m_queryLimit;
-                    const auto timestamp = timestampData[counter];
-                    const auto queryId = counter;
+                return;
+            }
 
-                    auto* item = Profiler::QueueSerial();
-                    MemWrite(&item->hdr.type, QueueType::GpuTime);
-                    MemWrite(&item->gpuTime.gpuTime, timestamp);
-                    MemWrite(&item->gpuTime.queryId, static_cast<uint16_t>(queryId));
-                    MemWrite(&item->gpuTime.context, GetId());
-
-                    Profiler::QueueSerialFinish();
+            for (auto i = begin; i != latestCheckpoint; ++i)
+            {
+                uint32_t k = RingIndex(i);
+                UINT64& timestamp = timestamps[k];
+                // Some timestamps may just linger around for a bit (or forever) because:
+                // 1. the order in which commands are submitted to the queue is unknown to Tracy
+                // 2. with parallel command list recording, timestamps ids can be distributed in any order
+                // 3. an instrumented command list may not ever be submitted to a queue
+                // 4. an instrumented command list may be re-submitted multiple times
+                // A timestamp value of 0 does not have special meaning as far as D3D12 is concerned;
+                // we just need something to identify timestamps that have not being resolved yet, and
+                // zero is as good a value as anything else (sure, the GPU may actually end up writing a
+                // timestamp value of zero at some point, but the odds are astronomically negligible)
+                if (timestamp == 0)
+                {
+                    break;
                 }
-
-                m_payloadQueue.pop();
+                m_previousCheckpoint += 1;
+                auto* item = Profiler::QueueSerial();
+                MemWrite(&item->hdr.type, QueueType::GpuTime);
+                MemWrite(&item->gpuTime.gpuTime, timestamp);
+                MemWrite(&item->gpuTime.queryId, static_cast<uint16_t>(k));
+                MemWrite(&item->gpuTime.context, m_contextId);
+                Profiler::QueueSerialFinish();
+                timestamp = 0;  // "reset" timestamp
             }
 
             m_readbackBuffer->Unmap(0, nullptr);
 
-            // Recalibrate to account for drift.
-            RecalibrateClocks();
+            RecalibrateClocks();    // to account for drift
         }
 
     private:
