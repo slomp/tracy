@@ -141,12 +141,15 @@ namespace tracy
             D3D12_QUERY_HEAP_DESC heapDesc{};
             heapDesc.Type = queue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_COPY ? D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP : D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
             heapDesc.Count = m_queryLimit;
+            heapDesc.Count += 1; // reserve an extra query for the "invalid" query index sentinel (see NextQueryId())
             heapDesc.NodeMask = 0;  // #TODO: Support multiple adapters.
 
             while (FAILED(device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&m_queryHeap))))
             {
                 m_queryLimit /= 2;
                 heapDesc.Count = m_queryLimit;
+                heapDesc.Count += 1;
+            }
 
             if (m_queryHeap == nullptr)
             {
@@ -362,7 +365,7 @@ namespace tracy
             if (RingCount(m_previousCheckpoint, id) >= m_queryLimit)
             {
                 TracyD3D12Panic("Submitted too many GPU queries! Consider increasing MaxQueries.");
-                // #TODO: return some sentinel value; ideally a "hidden" query index (0, maybe?)
+                return (m_queryLimit + 1);  // this query index is valid, but will never be collected
             }
             return RingIndex(id);
         }
