@@ -59,6 +59,7 @@ namespace tracy
         std::atomic<UINT64> m_queryCounter = 0;
         uint32_t m_queryLimit = 0;
 
+        std::mutex m_collectionMutex;
         ID3D12Fence* m_fenceCheckpoint = nullptr;
         std::atomic<UINT64> m_previousCheckpoint = 0;
         UINT64 m_nextCheckpoint = 0;
@@ -251,9 +252,12 @@ namespace tracy
             }
 #endif
 
-            // Find out what payloads are available.
-            const auto newestReadyPayload = m_payloadFence->GetCompletedValue();
-            const auto payloadCount = m_payloadQueue.size() - (m_activePayload - newestReadyPayload);
+            // Only one thread is allowed to collect timestamps at any given time
+            // but there's no need to block contending threads
+            if (!m_collectionMutex.try_lock())
+                return;
+
+            std::unique_lock lock (m_collectionMutex, std::adopt_lock);
 
             UINT64 begin = m_previousCheckpoint.load();
             UINT64 latestCheckpoint = m_fenceCheckpoint->GetCompletedValue();
