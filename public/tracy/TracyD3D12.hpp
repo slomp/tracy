@@ -39,7 +39,7 @@ using TracyD3D12Ctx = void*;
 #include <d3d12.h>
 #include <dxgi.h>
 
-#define TracyD3D12Panic(msg, ...) do { assert(false && "TracyD3D12: " msg); TracyMessageLC("TracyD3D12: " msg, tracy::Color::Red4); } while(false);
+#define TracyD3D12Panic(msg, ...) do { assert(false && "TracyD3D12: " msg); TracyMessageLC("TracyD3D12: " msg, tracy::Color::Red4); __VA_ARGS__; } while(false);
 
 namespace tracy
 {
@@ -213,7 +213,7 @@ namespace tracy
             MemWrite(&item->hdr.type, QueueType::GpuNewContext);
             MemWrite(&item->gpuNewContext.cpuTime, cpuTimestamp);
             MemWrite(&item->gpuNewContext.gpuTime, gpuTimestamp);
-            MemWrite(&item->gpuNewContext.thread, decltype(item->gpuNewContext.thread)(0)); // TODO: why 0?
+            MemWrite(&item->gpuNewContext.thread, decltype(item->gpuNewContext.thread)(0)); // #TODO: why 0? why not GetThreadHandle()?
             MemWrite(&item->gpuNewContext.period, period);
             MemWrite(&item->gpuNewContext.context, m_contextId);
             MemWrite(&item->gpuNewContext.flags, GpuContextCalibration);
