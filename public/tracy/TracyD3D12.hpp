@@ -223,6 +223,12 @@ namespace tracy
 
         ~D3D12QueueCtx()
         {
+            do
+            {
+                Collect();  // collect all pending timestamps
+                // #TODO: avoid busywait and signal spamming
+                // (consider SetEventOnCompletion + WaitForSingleObject)
+            } while (RingCount(m_previousCheckpoint, m_fenceCheckpoint->GetCompletedValue()) > 0);
             m_fenceCheckpoint->Release();
             m_readbackBuffer->Release();
             m_queryHeap->Release();
