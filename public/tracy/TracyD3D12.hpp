@@ -7,8 +7,6 @@
 #define TracyD3D12Destroy(ctx)
 #define TracyD3D12ContextName(ctx, name, size)
 
-#define TracyD3D12NewFrame(ctx)
-
 #define TracyD3D12Zone(ctx, cmdList, name)
 #define TracyD3D12ZoneC(ctx, cmdList, name, color)
 #define TracyD3D12NamedZone(ctx, varname, cmdList, name, active)
@@ -40,18 +38,11 @@ using TracyD3D12Ctx = void*;
 #include <cassert>
 #include <d3d12.h>
 #include <dxgi.h>
-#include <queue>
 
 #define TracyD3D12Panic(msg, ...) do { assert(false && "TracyD3D12: " msg); TracyMessageLC("TracyD3D12: " msg, tracy::Color::Red4); __VA_ARGS__; } while(false);
 
 namespace tracy
 {
-
-    struct D3D12QueryPayload
-    {
-        uint32_t m_queryIdStart = 0;
-        uint32_t m_queryCount = 0;
-    };
 
     // Command queue context.
     class D3D12QueueCtx
@@ -64,14 +55,14 @@ namespace tracy
         ID3D12QueryHeap* m_queryHeap = nullptr;
         ID3D12Resource* m_readbackBuffer = nullptr;
 
-        // In-progress payload.
+        static_assert(std::atomic<UINT64>::is_always_lock_free);
+        std::atomic<UINT64> m_queryCounter = 0;
         uint32_t m_queryLimit = 0;
-        std::atomic<uint32_t> m_queryCounter = 0;
-        uint32_t m_previousQueryCounter = 0;
 
-        uint32_t m_activePayload = 0;
-        ID3D12Fence* m_payloadFence = nullptr;
-        std::queue<D3D12QueryPayload> m_payloadQueue;
+        std::mutex m_collectionMutex;
+        ID3D12Fence* m_fenceCheckpoint = nullptr;
+        std::atomic<UINT64> m_previousCheckpoint = 0;
+        UINT64 m_nextCheckpoint = 0;
 
         UINT64 m_prevCalibrationTicksCPU = 0;
 
@@ -111,6 +102,20 @@ namespace tracy
 #endif
             Profiler::QueueSerialFinish();
         }
+
+        tracy_force_inline uint32_t RingIndex(UINT64 index)
+        {
+            index %= m_queryLimit;
+            return static_cast<uint32_t>(index);
+        }
+
+        tracy_force_inline uint32_t RingCount(UINT64 begin, UINT64 end)
+        {
+            // wrap-around safe: all unsigned
+            UINT64 count = end - begin;
+            return static_cast<uint32_t>(count);
+        }
+
 
     public:
         D3D12QueueCtx(ID3D12Device* device, ID3D12CommandQueue* queue)
@@ -166,12 +171,13 @@ namespace tracy
             readbackHeapProps.CreationNodeMask = 0;
             readbackHeapProps.VisibleNodeMask = 0;  // #TODO: Support multiple adapters.
 
+            // readback buffer will be initialized with zeroes (unless D3D12_HEAP_FLAG_CREATE_NOT_ZEROED)
             if (FAILED(device->CreateCommittedResource(&readbackHeapProps, D3D12_HEAP_FLAG_NONE, &readbackBufferDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_readbackBuffer))))
             {
                 TracyD3D12Panic("Failed to create query readback buffer.", return);
             }
 
-            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_payloadFence))))
+            if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fenceCheckpoint))))
             {
                 TracyD3D12Panic("Failed to create payload fence.", return);
             }
@@ -222,27 +228,15 @@ namespace tracy
         {
             ZoneScopedC(Color::Red4);
             // collect all pending timestamps
-            while (m_payloadFence->GetCompletedValue() != m_activePayload)
-                /* busy-wait ... */;
-            Collect();
-            m_payloadFence->Release();
+            do
+            {
+                Collect();  // collect all pending timestamps
+                // #TODO: avoid busywait and signal spamming
+                // (consider SetEventOnCompletion + WaitForSingleObject)
+            } while (RingCount(m_previousCheckpoint, m_fenceCheckpoint->GetCompletedValue()) > 0);
+            m_fenceCheckpoint->Release();
             m_readbackBuffer->Release();
             m_queryHeap->Release();
-        }
-
-
-        void NewFrame()
-        {
-            uint32_t queryCounter = m_queryCounter.exchange(0);
-            m_payloadQueue.emplace(D3D12QueryPayload{ m_previousQueryCounter, queryCounter });
-            m_previousQueryCounter += queryCounter;
-
-            if (m_previousQueryCounter >= m_queryLimit)
-            {
-                m_previousQueryCounter -= m_queryLimit;
-            }
-
-            m_queue->Signal(m_payloadFence, ++m_activePayload);
         }
 
         void Name( const char* name, uint16_t len )
@@ -265,74 +259,108 @@ namespace tracy
 #ifdef TRACY_ON_DEMAND
             if (!GetProfiler().IsConnected())
             {
-                m_queryCounter = 0;
-
                 return;
             }
 #endif
 
-            // Find out what payloads are available.
-            const auto newestReadyPayload = m_payloadFence->GetCompletedValue();
-            const auto payloadCount = m_payloadQueue.size() - (m_activePayload - newestReadyPayload);
+            // Only one thread is allowed to collect timestamps at any given time
+            // but there's no need to block contending threads
+            if (!m_collectionMutex.try_lock())
+                return;
 
-            if (!payloadCount)
+            std::unique_lock lock (m_collectionMutex, std::adopt_lock);
+
+            UINT64 begin = m_previousCheckpoint.load();
+            UINT64 latestCheckpoint = m_fenceCheckpoint->GetCompletedValue();
+            uint32_t count = RingCount(begin, latestCheckpoint);
+
+            if (count == 0)   // no pending timestamp queries
             {
-                return;  // No payloads are available yet, exit out.
+                // #WARN: there's the possibility of a subtle race condition here:
+                // even though NextQueryId() generates ids atomically, the matching timestamp query
+                // command associated with an id is only placed into a command list a few lines later;
+                // meanwhile, if Collect() happens to be running in parallel with NextQueryId(), it may
+                // end up updating the checkpoint (and fence) with a query counter value that is yet to
+                // be placed into a command list and submitted for execution... (that said, this should
+                // not lead to issues because Collect() attempts to detect unresolved timestamp queries
+                // and will defer the collection of such queries to subsequent calls)
+                UINT64 nextCheckpoint = m_queryCounter.load();
+                if (nextCheckpoint != latestCheckpoint)
+                {
+                    // safe to call Signal at any time: D3D12 command queues perform internal locking
+                    m_queue->Signal(m_fenceCheckpoint, nextCheckpoint);
+                }
+                return;
             }
 
-            D3D12_RANGE mapRange{ 0, m_queryLimit * sizeof(uint64_t) };
+            if ((count % 2) != 0)   // paranoid check
+            {
+                return;
+            }
 
-            // Map the readback buffer so we can fetch the query data from the GPU.
-            void* readbackBufferMapping = nullptr;
+            if (count >= m_queryLimit)
+            {
+                return;
+            }
 
-            if (FAILED(m_readbackBuffer->Map(0, &mapRange, &readbackBufferMapping)))
+            // technically, the timestamp buffer could be persistently mapped
+            UINT64* timestamps = [&]()
+            {
+                void* rawbytes = nullptr;
+                // #TODO: map only the [begin, end) range;
+                // (may require multiple mapping due to circular buffer wrap-around)
+                D3D12_RANGE mapRange { 0, m_queryLimit * sizeof(UINT64) };
+                m_readbackBuffer->Map(0, &mapRange, &rawbytes);
+                return static_cast<UINT64*>(rawbytes);
+            }();
+
+            if (timestamps == nullptr)
             {
                 TracyD3D12Panic("Failed to map readback buffer.", return);
             }
 
-            auto* timestampData = static_cast<uint64_t*>(readbackBufferMapping);
-
-            for (uint32_t i = 0; i < payloadCount; ++i)
+            for (auto i = begin; i != latestCheckpoint; ++i)
             {
-                const auto& payload = m_payloadQueue.front();
-
-                for (uint32_t j = 0; j < payload.m_queryCount; ++j)
+                uint32_t k = RingIndex(i);
+                UINT64& timestamp = timestamps[k];
+                // Some timestamps may just linger around for a bit (or forever) because:
+                // 1. the order in which commands are submitted to the queue is unknown to Tracy
+                // 2. with parallel command list recording, timestamps ids can be distributed in any order
+                // 3. an instrumented command list may not ever be submitted to a queue
+                // 4. an instrumented command list may be re-submitted multiple times
+                // A timestamp value of 0 does not have special meaning as far as D3D12 is concerned;
+                // we just need something to identify timestamps that have not being resolved yet, and
+                // zero is as good a value as anything else (sure, the GPU may actually end up writing a
+                // timestamp value of zero at some point, but the odds are astronomically negligible)
+                if (timestamp == 0)
                 {
-                    const auto counter = (payload.m_queryIdStart + j) % m_queryLimit;
-                    const auto timestamp = timestampData[counter];
-                    const auto queryId = counter;
-
-                    auto* item = Profiler::QueueSerial();
-                    MemWrite(&item->hdr.type, QueueType::GpuTime);
-                    MemWrite(&item->gpuTime.gpuTime, timestamp);
-                    MemWrite(&item->gpuTime.queryId, static_cast<uint16_t>(queryId));
-                    MemWrite(&item->gpuTime.context, GetId());
-
-                    Profiler::QueueSerialFinish();
+                    break;
                 }
-
-                m_payloadQueue.pop();
+                m_previousCheckpoint += 1;
+                auto* item = Profiler::QueueSerial();
+                MemWrite(&item->hdr.type, QueueType::GpuTime);
+                MemWrite(&item->gpuTime.gpuTime, timestamp);
+                MemWrite(&item->gpuTime.queryId, static_cast<uint16_t>(k));
+                MemWrite(&item->gpuTime.context, m_contextId);
+                Profiler::QueueSerialFinish();
+                timestamp = 0;  // "reset" timestamp
             }
 
             m_readbackBuffer->Unmap(0, nullptr);
 
-            // Recalibrate to account for drift.
-            RecalibrateClocks();
+            RecalibrateClocks();    // to account for drift
         }
 
     private:
         tracy_force_inline uint32_t NextQueryId()
         {
-            uint32_t queryCounter = m_queryCounter.fetch_add(2);
-            if (queryCounter >= m_queryLimit)
+            auto id = m_queryCounter.fetch_add(2);
+            if (RingCount(m_previousCheckpoint, id) >= m_queryLimit)
             {
                 TracyD3D12Panic("Submitted too many GPU queries! Consider increasing MaxQueries.");
-                // #TODO: consider returning an invalid id or sentinel value here
+                // #TODO: return some sentinel value; ideally a "hidden" query index (0, maybe?)
             }
-
-            const uint32_t id = (m_previousQueryCounter + queryCounter) % m_queryLimit;
-
-            return id;
+            return RingIndex(id);
         }
 
         tracy_force_inline uint8_t GetId() const
@@ -431,6 +459,8 @@ namespace tracy
             MemWrite(&item->gpuZoneEnd.context, m_ctx->GetId());
             Profiler::QueueSerialFinish();
 
+            // #TODO: consider resolving entire ranges during Collect
+            // (ResolveQueryData seems to ntroduce a gap of a few microseconds between commands)
             m_cmdList->ResolveQueryData(m_ctx->m_queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, m_queryId, 2, m_ctx->m_readbackBuffer, m_queryId * sizeof(uint64_t));
         }
     };
@@ -458,8 +488,6 @@ using TracyD3D12Ctx = tracy::D3D12QueueCtx*;
 #define TracyD3D12Context(device, queue) tracy::CreateD3D12Context(device, queue);
 #define TracyD3D12Destroy(ctx) tracy::DestroyD3D12Context(ctx);
 #define TracyD3D12ContextName(ctx, name, size) ctx->Name(name, size);
-
-#define TracyD3D12NewFrame(ctx) ctx->NewFrame();
 
 #define TracyD3D12UnnamedZone ___tracy_gpu_d3d12_zone
 #define TracyD3D12SrcLocSymbol TracyConcat(__tracy_d3d12_source_location,TracyLine)
