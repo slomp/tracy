@@ -77,6 +77,19 @@ namespace tracy
 
         UINT64 m_prevCalibrationTicksCPU = 0;
 
+        tracy_force_inline uint32_t RingIndex(UINT64 index)
+        {
+            index %= m_queryLimit;
+            return static_cast<uint32_t>(index);
+        }
+
+        tracy_force_inline uint32_t RingCount(UINT64 begin, UINT64 end)
+        {
+            // wrap-around safe: all unsigned
+            UINT64 count = end - begin;
+            return static_cast<uint32_t>(count);
+        }
+
         tracy_force_inline void SubmitQueueItem(tracy::QueueItem* item)
         {
 #ifdef TRACY_ON_DEMAND
@@ -314,12 +327,12 @@ namespace tracy
     private:
         tracy_force_inline uint32_t NextQueryId()
         {
-            uint32_t queryCounter = m_queryCounter.fetch_add(2);
-            assert(queryCounter < m_queryLimit && "Submitted too many GPU queries! Consider increasing MaxQueries.");
-
-            const uint32_t id = (m_previousQueryCounter + queryCounter) % m_queryLimit;
-
-            return id;
+            auto id = m_queryCounter.fetch_add(2);
+            if (RingCount(m_previousCheckpoint, id) >= m_queryLimit)
+            {
+                // #TODO: return some sentinel value; ideally a "hidden" query index
+            }
+            return RingIndex(id);
         }
 
         tracy_force_inline uint8_t GetId() const
