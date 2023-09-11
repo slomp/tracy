@@ -42,6 +42,8 @@ using TracyD3D12Ctx = void*;
 #include <dxgi.h>
 #include <queue>
 
+#define TracyD3D12Panic(msg) assert(false && "TracyD3D12: " msg); TracyMessageLC("TracyD3D12: " msg, tracy::Color::Red4);
+
 namespace tracy
 {
 
@@ -58,11 +60,9 @@ namespace tracy
 
         static constexpr uint32_t MaxQueries = 64 * 1024;  // Queries are begin and end markers, so we can store half as many total time durations. Must be even!
 
-        bool m_initialized = false;
-
         ID3D12Device* m_device = nullptr;
         ID3D12CommandQueue* m_queue = nullptr;
-        uint8_t m_context;
+        uint8_t m_contextId = 255;  // TODO: apparently, 255 means "invalid id"; is this documented somewhere?
         ID3D12QueryHeap* m_queryHeap;
         ID3D12Resource* m_readbackBuffer;
 
@@ -91,7 +91,7 @@ namespace tracy
             UINT64 gpuTimestamp;
             if (FAILED(m_queue->GetClockCalibration(&gpuTimestamp, &cpuTimestamp)))
             {
-                assert(false && "failed to obtain queue clock calibration counters.");
+                TracyD3D12Panic("failed to obtain queue clock calibration counters.");
                 return;
             }
 
@@ -110,7 +110,7 @@ namespace tracy
                 MemWrite(&item->gpuCalibration.gpuTime, gpuTimestamp);
                 MemWrite(&item->gpuCalibration.cpuTime, cpuTimestamp);
                 MemWrite(&item->gpuCalibration.cpuDelta, cpuDeltaNS);
-                MemWrite(&item->gpuCalibration.context, m_context);
+                MemWrite(&item->gpuCalibration.context, GetId());
                 SubmitQueueItem(item);
             }
         }
@@ -119,7 +119,6 @@ namespace tracy
         D3D12QueueCtx(ID3D12Device* device, ID3D12CommandQueue* queue)
             : m_device(device)
             , m_queue(queue)
-            , m_context(GetGpuCtxCounter().fetch_add(1, std::memory_order_relaxed))
         {
             // Verify we support timestamp queries on this queue.
 
@@ -201,18 +200,19 @@ namespace tracy
 
             cpuTimestamp = Profiler::GetTime();
 
+            // all checked: ready to roll
+            m_contextId = GetGpuCtxCounter().fetch_add(1);
+
             auto* item = Profiler::QueueSerial();
             MemWrite(&item->hdr.type, QueueType::GpuNewContext);
             MemWrite(&item->gpuNewContext.cpuTime, cpuTimestamp);
             MemWrite(&item->gpuNewContext.gpuTime, gpuTimestamp);
             MemWrite(&item->gpuNewContext.thread, decltype(item->gpuNewContext.thread)(0)); // TODO: why 0?
             MemWrite(&item->gpuNewContext.period, period);
-            MemWrite(&item->gpuNewContext.context, m_context);
+            MemWrite(&item->gpuNewContext.context, m_contextId);
             MemWrite(&item->gpuNewContext.flags, GpuContextCalibration);
             MemWrite(&item->gpuNewContext.type, GpuContextType::Direct3D12);
             SubmitQueueItem(item);
-
-            m_initialized = true;
         }
 
         ~D3D12QueueCtx()
@@ -243,7 +243,7 @@ namespace tracy
 
             auto item = Profiler::QueueSerial();
             MemWrite( &item->hdr.type, QueueType::GpuContextName );
-            MemWrite( &item->gpuContextNameFat.context, m_context );
+            MemWrite( &item->gpuContextNameFat.context, GetId() );
             MemWrite( &item->gpuContextNameFat.ptr, (uint64_t)ptr );
             MemWrite( &item->gpuContextNameFat.size, len );
             SubmitQueueItem(item);
@@ -297,7 +297,7 @@ namespace tracy
                     MemWrite(&item->hdr.type, QueueType::GpuTime);
                     MemWrite(&item->gpuTime.gpuTime, timestamp);
                     MemWrite(&item->gpuTime.queryId, static_cast<uint16_t>(queryId));
-                    MemWrite(&item->gpuTime.context, m_context);
+                    MemWrite(&item->gpuTime.context, GetId());
 
                     Profiler::QueueSerialFinish();
                 }
@@ -324,7 +324,7 @@ namespace tracy
 
         tracy_force_inline uint8_t GetId() const
         {
-            return m_context;
+            return m_contextId;
         }
     };
 
@@ -437,6 +437,8 @@ namespace tracy
     }
 
 }
+
+#undef TracyD3D12Panic
 
 using TracyD3D12Ctx = tracy::D3D12QueueCtx*;
 
