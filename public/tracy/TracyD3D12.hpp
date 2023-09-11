@@ -39,7 +39,7 @@ using TracyD3D12Ctx = void*;
 #include <d3d12.h>
 #include <dxgi.h>
 
-#define TracyD3D12Panic(msg) assert(false && "TracyD3D12: " msg); TracyMessageLC("TracyD3D12: " msg, tracy::Color::Red4);
+#define TracyD3D12Panic(msg, ...) do { assert(false && "TracyD3D12: " msg); TracyMessageLC("TracyD3D12: " msg, tracy::Color::Red4); } while(false);
 
 namespace tracy
 {
@@ -290,13 +290,13 @@ namespace tracy
 
             if ((count % 2) != 0)   // paranoid check
             {
-            D3D12_RANGE mapRange{ 0, m_queryLimit * sizeof(uint64_t) };
+                TracyD3D12Panic("unpaired timestamps.", return false);
                 return;
             }
 
             if (count >= m_queryLimit)
             {
-                assert(false && "Failed to map readback buffer.");
+                TracyD3D12Panic("too many pending timestamp queries.", return false);
                 return;
             }
 
@@ -313,7 +313,7 @@ namespace tracy
 
             if (timestamps == nullptr)
             {
-                    const auto counter = (payload.m_queryIdStart + j) % m_queryLimit;
+                TracyD3D12Panic("unable to map read-back resolve buffer.", return false);
                 return;
             }
 
@@ -347,6 +347,8 @@ namespace tracy
             m_readbackBuffer->Unmap(0, nullptr);
 
             RecalibrateClocks();    // to account for drift
+
+            return;
         }
 
     private:
@@ -355,6 +357,7 @@ namespace tracy
             auto id = m_queryCounter.fetch_add(2);
             if (RingCount(m_previousCheckpoint, id) >= m_queryLimit)
             {
+                TracyD3D12Panic("too many pending timestamp queries.");
                 // #TODO: return some sentinel value; ideally a "hidden" query index
             }
             return RingIndex(id);
