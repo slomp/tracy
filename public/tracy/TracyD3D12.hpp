@@ -40,7 +40,6 @@ using TracyD3D12Ctx = void*;
 #include <cassert>
 #include <d3d12.h>
 #include <dxgi.h>
-#include <wrl/client.h>
 #include <queue>
 
 namespace tracy
@@ -64,8 +63,8 @@ namespace tracy
         ID3D12Device* m_device = nullptr;
         ID3D12CommandQueue* m_queue = nullptr;
         uint8_t m_context;
-        Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_queryHeap;
-        Microsoft::WRL::ComPtr<ID3D12Resource> m_readbackBuffer;
+        ID3D12QueryHeap* m_queryHeap;
+        ID3D12Resource* m_readbackBuffer;
 
         // In-progress payload.
         uint32_t m_queryLimit = MaxQueries;
@@ -73,7 +72,7 @@ namespace tracy
         uint32_t m_previousQueryCounter = 0;
 
         uint32_t m_activePayload = 0;
-        Microsoft::WRL::ComPtr<ID3D12Fence> m_payloadFence;
+        ID3D12Fence* m_payloadFence;
         std::queue<D3D12QueryPayload> m_payloadQueue;
 
         int64_t m_prevCalibration = 0;
@@ -177,6 +176,13 @@ namespace tracy
             m_initialized = true;
         }
 
+        ~D3D12QueueCtx()
+        {
+            m_payloadFence->Release();
+            m_readbackBuffer->Release();
+            m_queryHeap->Release();
+        }
+
         void NewFrame()
         {
             uint32_t queryCounter = m_queryCounter.exchange(0);
@@ -188,7 +194,7 @@ namespace tracy
                 m_previousQueryCounter -= m_queryLimit;
             }
 
-            m_queue->Signal(m_payloadFence.Get(), ++m_activePayload);
+            m_queue->Signal(m_payloadFence, ++m_activePayload);
         }
 
         void Name( const char* name, uint16_t len )
@@ -332,7 +338,7 @@ namespace tracy
             m_cmdList = cmdList;
 
             m_queryId = ctx->NextQueryId();
-            cmdList->EndQuery(ctx->m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
+            cmdList->EndQuery(ctx->m_queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
 
             auto* item = Profiler::QueueSerial();
             MemWrite(&item->hdr.type, QueueType::GpuZoneBeginSerial);
@@ -358,7 +364,7 @@ namespace tracy
             m_cmdList = cmdList;
 
             m_queryId = ctx->NextQueryId();
-            cmdList->EndQuery(ctx->m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
+            cmdList->EndQuery(ctx->m_queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
 
             auto* item = Profiler::QueueSerialCallstack(Callstack(depth));
             MemWrite(&item->hdr.type, QueueType::GpuZoneBeginCallstackSerial);
@@ -384,7 +390,7 @@ namespace tracy
             m_cmdList = cmdList;
 
             m_queryId = ctx->NextQueryId();
-            cmdList->EndQuery(ctx->m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
+            cmdList->EndQuery(ctx->m_queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
 
             const auto sourceLocation = Profiler::AllocSourceLocation(line, source, sourceSz, function, functionSz, name, nameSz);
 
@@ -412,7 +418,7 @@ namespace tracy
             m_cmdList = cmdList;
 
             m_queryId = ctx->NextQueryId();
-            cmdList->EndQuery(ctx->m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
+            cmdList->EndQuery(ctx->m_queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, m_queryId);
 
             const auto sourceLocation = Profiler::AllocSourceLocation(line, source, sourceSz, function, functionSz, name, nameSz);
 
@@ -432,7 +438,7 @@ namespace tracy
             if (!m_active) return;
 
             const auto queryId = m_queryId + 1;  // Our end query slot is immediately after the begin slot.
-            m_cmdList->EndQuery(m_ctx->m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, queryId);
+            m_cmdList->EndQuery(m_ctx->m_queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, queryId);
 
             auto* item = Profiler::QueueSerial();
             MemWrite(&item->hdr.type, QueueType::GpuZoneEndSerial);
@@ -443,7 +449,7 @@ namespace tracy
 
             Profiler::QueueSerialFinish();
 
-            m_cmdList->ResolveQueryData(m_ctx->m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, m_queryId, 2, m_ctx->m_readbackBuffer.Get(), m_queryId * sizeof(uint64_t));
+            m_cmdList->ResolveQueryData(m_ctx->m_queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, m_queryId, 2, m_ctx->m_readbackBuffer, m_queryId * sizeof(uint64_t));
         }
     };
 
