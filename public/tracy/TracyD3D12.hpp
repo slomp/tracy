@@ -326,10 +326,9 @@ namespace tracy
                 TracyD3D12Panic("Failed to map readback buffer.", return);
             }
 
-            for (auto i = begin; i != latestCheckpoint; ++i)
+            for (auto i = begin; i != latestCheckpoint; i += 2)
             {
                 uint32_t k = RingIndex(i);
-                UINT64& timestamp = timestamps[k];
                 // Some timestamps may just linger around for a bit (or forever) because:
                 // 1. the order in which commands are submitted to the queue is unknown to Tracy
                 // 2. with parallel command list recording, timestamps ids can be distributed in any order
@@ -339,18 +338,16 @@ namespace tracy
                 // we just need something to identify timestamps that have not being resolved yet, and
                 // zero is as good a value as anything else (sure, the GPU may actually end up writing a
                 // timestamp value of zero at some point, but the odds are astronomically negligible)
-                if (timestamp == 0)
+                if ((timestamps[k+0] == 0) || (timestamps[k+1] == 0))
                 {
                     break;
                 }
-                m_previousCheckpoint += 1;
-                auto* item = Profiler::QueueSerial();
-                MemWrite(&item->hdr.type, QueueType::GpuTime);
-                MemWrite(&item->gpuTime.gpuTime, timestamp);
-                MemWrite(&item->gpuTime.queryId, static_cast<uint16_t>(k));
-                MemWrite(&item->gpuTime.context, m_contextId);
-                Profiler::QueueSerialFinish();
-                timestamp = 0;  // "reset" timestamp
+                SubmitTimestamp(k+0, timestamps[k+0]);
+                SubmitTimestamp(k+1, timestamps[k+1]);
+                // "reset" timestamps
+                timestamps[k+0] = 0;
+                timestamps[k+1] = 0;
+                m_previousCheckpoint += 2;
             }
 
             m_readbackBuffer->Unmap(0, nullptr);
@@ -373,6 +370,16 @@ namespace tracy
         tracy_force_inline uint8_t GetId() const
         {
             return m_contextId;
+        }
+
+        tracy_force_inline void SubmitTimestamp(uint32_t queryId, UINT64 timestamp)
+        {
+            auto* item = Profiler::QueueSerial();
+            MemWrite(&item->hdr.type, QueueType::GpuTime);
+            MemWrite(&item->gpuTime.gpuTime, static_cast<int64_t>(timestamp));
+            MemWrite(&item->gpuTime.queryId, static_cast<uint16_t>(queryId));
+            MemWrite(&item->gpuTime.context, GetId());
+            Profiler::QueueSerialFinish();
         }
     };
 
