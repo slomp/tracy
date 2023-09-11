@@ -147,6 +147,10 @@ namespace tracy
             {
                 m_queryLimit /= 2;
                 heapDesc.Count = m_queryLimit;
+
+            if (m_queryHeap == nullptr)
+            {
+                TracyD3D12Panic("Failed to create query heap.", return);
             }
 
             // Create a readback buffer, which will be used as a destination for the query data.
