@@ -109,7 +109,7 @@ int main( int argc, char** argv )
     bool overwrite = false;
     const char* address = "127.0.0.1";
     const char* output = nullptr;
-    int port = 8086;
+    int port = 8087;
     int seconds = -1;
 
     int c;

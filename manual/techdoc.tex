@@ -355,7 +355,7 @@ The main profiler loop (\texttt{Worker()}) handles dequeuing events and sending 
 
 \subsubsection{Establishing connection}
 
-Profiler waits for an incoming TCP connections on port 8086. To advertise that a client is available, an UDP broadcast (\texttt{BroadcastMessage}) is being sent on the same port.
+Profiler waits for an incoming TCP connections on port 8087. To advertise that a client is available, an UDP broadcast (\texttt{BroadcastMessage}) is being sent on the same port.
 
 Each iteration of the main connection loop handles the whole connection. Multiple iterations are only possible if the on-demand mode is enabled, or if the initial handshake is not successful.
 
