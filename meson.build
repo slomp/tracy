@@ -1,4 +1,4 @@
-project('tracy', ['cpp'], version: '0.9.1')
+project('tracy', ['cpp'], version: '0.10.0')
 
 if get_option('tracy_enable')
   add_project_arguments('-DTRACY_ENABLE', language : 'cpp')
@@ -64,6 +64,10 @@ if get_option('tracy_no_system_tracing')
   add_project_arguments('-DTRACY_NO_SYSTEM_TRACING', language : 'cpp')
 endif
 
+if get_option('tracy_patchable_nopsleds')
+  add_project_arguments('-DTRACY_PATCHABLE_NOPSLEDS', language : 'cpp')
+endif
+
 if get_option('tracy_delayed_init')
   add_project_arguments('-DTRACY_DELAYED_INIT', language : 'cpp')
 endif
@@ -90,6 +94,10 @@ if get_option('tracy_no_crash_handler')
 endif
 
 threads_dep = dependency('threads')
+
+if host_machine.system() == 'windows'
+  add_project_arguments('-DWINVER=0x0601', '-D_WIN32_WINNT=0x0601',  language: 'cpp')
+endif
 
 includes = [
     'public/tracy/TracyC.h',
