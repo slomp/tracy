@@ -39,6 +39,13 @@ pub fn build(b: *std.Build) void
         exeTracyProfiler.addIncludePath(.{.path = "../../../vcpkg_installed/x64-windows-static/include"});
         exeTracyProfiler.addIncludePath(.{.path = "../../../vcpkg_installed/x64-windows-static/include/capstone"});
     }
+    if (target.isDarwin())
+    {
+        exeTracyProfiler.addIncludePath(.{.path = "/opt/homebrew/Cellar/glfw/3.3.8/include"});
+        exeTracyProfiler.addIncludePath(.{.path = "/opt/homebrew/opt/freetype/include/freetype2"});
+        exeTracyProfiler.addIncludePath(.{.path = "/opt/homebrew/opt/libpng/include/libpng16"});
+        exeTracyProfiler.addIncludePath(.{.path = "/opt/homebrew/Cellar/capstone/5.0.1/include/capstone"});
+    }
 
     exeTracyProfiler.addCSourceFiles(
         &[_][]const u8{
@@ -83,10 +90,19 @@ pub fn build(b: *std.Build) void
         &(.{})
     );
 
+    if (target.isDarwin())
+    {
+        exeTracyProfiler.addCSourceFiles(
+            &(.{"../../../nfd/nfd_cocoa.m"}),
+            &(.{})
+        );
+    }
+
     exeTracyProfiler.addCSourceFiles(
         &[_][]const u8{
         // $(ls ../../../nfd/nfd_win.cpp)
-            "../../../nfd/nfd_win.cpp",
+            if (target.isWindows()) "../../../nfd/nfd_win.cpp"
+            else "./patch/empty.cpp",
         // $(ls ../../src/*.cpp | grep -v BackendWayland.cpp)
             "../../src/BackendGlfw.cpp",
             //"../../src/BackendWayland.cpp",   // Linux-only
@@ -206,18 +222,35 @@ pub fn build(b: *std.Build) void
         //exeTracyProfiler.linkSystemLibrary("legacy_stdio_definitions");
         //exeTracyProfiler.linkSystemLibrary("libcmt");
         //exeTracyProfiler.linkSystemLibrary("ucrt");
+
+        exeTracyProfiler.linkSystemLibrary("brotlicommon");
+        exeTracyProfiler.linkSystemLibrary("brotlidec");
+        exeTracyProfiler.linkSystemLibrary("freetype");
+        exeTracyProfiler.linkSystemLibrary("glfw3");
+        exeTracyProfiler.linkSystemLibrary("libpng16");
+        exeTracyProfiler.linkSystemLibrary("zlib");
+        exeTracyProfiler.linkSystemLibrary("bz2");
+        exeTracyProfiler.linkSystemLibrary("capstone");
+    }
+
+    if (target.isDarwin())
+    {
+        exeTracyProfiler.addLibraryPath(.{.path = "/opt/homebrew/Cellar/glfw/3.3.8/lib"});
+        exeTracyProfiler.addLibraryPath(.{.path = "/opt/homebrew/opt/freetype/lib"});
+        exeTracyProfiler.addLibraryPath(.{.path = "/opt/homebrew/Cellar/capstone/5.0.1/lib"});
+
+        exeTracyProfiler.linkSystemLibrary("glfw");
+        exeTracyProfiler.linkSystemLibrary("freetype");
+        exeTracyProfiler.linkSystemLibrary("capstone");
+        exeTracyProfiler.linkSystemLibrary("pthread");
+        exeTracyProfiler.linkSystemLibrary("dl");
+
+        exeTracyProfiler.linkFramework("CoreFoundation");
+        exeTracyProfiler.linkFramework("AppKit");
+        exeTracyProfiler.linkFramework("UniformTypeIdentifiers");
     }
 
     exeTracyProfiler.linkLibC();
-
-    exeTracyProfiler.linkSystemLibrary("brotlicommon");
-    exeTracyProfiler.linkSystemLibrary("brotlidec");
-    exeTracyProfiler.linkSystemLibrary("freetype");
-    exeTracyProfiler.linkSystemLibrary("glfw3");
-    exeTracyProfiler.linkSystemLibrary("libpng16");
-    exeTracyProfiler.linkSystemLibrary("zlib");
-    exeTracyProfiler.linkSystemLibrary("bz2");
-    exeTracyProfiler.linkSystemLibrary("capstone");
 
     if (!target.isWindows() or (target.abi != std.Target.Abi.msvc))
     {
