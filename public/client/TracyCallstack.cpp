@@ -10,6 +10,8 @@
 #include "../common/TracyAlloc.hpp"
 #include "../common/TracySystem.hpp"
 
+#include "../tracy/Tracy.hpp"
+#include "TracyProfiler.hpp"
 
 #ifdef TRACY_HAS_CALLSTACK
 
@@ -626,6 +628,13 @@ void InitCallstackCritical()
 }
 
 static void SymError( const char* function, DWORD code ) {
+    constexpr uint32_t Color_Red4 = 0x8b0000;   // TracyColor.hpp
+    ZoneScopedC(Color_Red4);
+    TracyPlot("SymError", int64_t(0));
+    TracyPlot("SymError", int64_t(code));
+    TracyPlot("SymError", int64_t(code));
+    TracyPlot("SymError", int64_t(0));
+    return;
     char message[1024] = {};
     int written = snprintf( message, sizeof( message ), "ERROR: %s FAILED with code %u (0x%x) | ", function, code, code );
     written += FormatMessageA(
@@ -639,6 +648,68 @@ static void SymError( const char* function, DWORD code ) {
     );
     fprintf( stderr, "%s\n", message );
     OutputDebugStringA( message );
+    tracy::InitCallstackCritical();
+    tracy::Profiler::LogString( MessageSourceType::Tracy, MessageSeverity::Error, Color_Red4, 60, written, message );
+}
+
+static BOOL TracySymFromAddr( HANDLE hProcess, DWORD64 Address, PDWORD64 Displacement, PSYMBOL_INFO Symbol )
+{
+    TracyPlot("TracyResolve", int64_t(0));
+    TracyPlot("TracyResolve", int64_t(1));
+    ZoneScoped;
+    BOOL status = SymFromAddr( hProcess, Address, Displacement, Symbol );
+    if( status == FALSE )
+        SymError( "SymFromAddr", GetLastError() );
+    TracyPlot("TracyResolve", int64_t(1));
+    TracyPlot("TracyResolve", int64_t(0));
+    return status;
+}
+
+static BOOL TracySymGetLineFromAddr64( HANDLE hProcess, DWORD64 qwAddr, PDWORD pdwDisplacement, PIMAGEHLP_LINE64 Line64 )
+{
+    ZoneScoped;
+    BOOL status = SymGetLineFromAddr64( hProcess, qwAddr, pdwDisplacement, Line64 );
+    if( status == FALSE )
+        SymError( "SymGetLineFromAddr64", GetLastError() );
+    return status;
+}
+
+static DWORD64 TracySymLoadModuleEx( HANDLE hProcess, HANDLE hFile, PCSTR ImageName, PCSTR ModuleName, DWORD64 BaseOfDll, DWORD DllSize, PMODLOAD_DATA Data, DWORD Flags ) {
+    ZoneScoped;
+    DWORD64 BaseAddress = SymLoadModuleEx( hProcess, hFile, ImageName, ModuleName, BaseOfDll, DllSize, Data, Flags );
+    if( BaseAddress == 0 ) {
+        DWORD code = GetLastError();
+        if( code != ERROR_SUCCESS )
+            SymError( "SymLoadModuleEx", GetLastError() );
+    }
+    return BaseAddress;
+}
+
+BOOL TracyEnumProcessModules( HANDLE hProcess, HMODULE* lphModule, DWORD cb, LPDWORD lpcbNeeded )
+{
+    ZoneScoped;
+    BOOL status = EnumProcessModules( hProcess, lphModule, cb, lpcbNeeded );
+    if( status == FALSE )
+        SymError( "EnumProcessModules", GetLastError() );
+    return status;
+}
+
+BOOL TracyGetModuleInformation( HANDLE hProcess, HMODULE hModule, LPMODULEINFO lpmodinfo, DWORD cb )
+{
+    ZoneScoped;
+    BOOL status = GetModuleInformation( hProcess, hModule, lpmodinfo, cb );
+    if( status == FALSE )
+        SymError( "GetModuleInformation", GetLastError() );
+    return status;
+}
+
+DWORD TracyGetModuleFileNameA( HMODULE hModule, LPSTR lpFilename, DWORD nSize )
+{
+    ZoneScoped;
+    BOOL status = GetModuleFileNameA( hModule, lpFilename, nSize );
+    if( status == FALSE )
+        SymError( "GetModuleFileNameA", GetLastError() );
+    return status;
 }
 
 void DbgHelpInit()
@@ -698,7 +769,7 @@ void DbgHelpInit()
 DWORD64 DbgHelpLoadSymbolsForModule( const char* imageName, uint64_t baseOfDll, uint32_t bllSize )
 {
     if( s_shouldResolveSymbolsOffline ) return 0;
-    return SymLoadModuleEx( GetCurrentProcess(), nullptr, imageName, nullptr, baseOfDll, bllSize, nullptr, 0 );
+    return TracySymLoadModuleEx( GetCurrentProcess(), nullptr, imageName, nullptr, baseOfDll, bllSize, nullptr, 0 );
 }
 
 char* FormatImageName( const char* imageName, uint32_t imageNameLength )
@@ -799,16 +870,16 @@ static void CacheProcessModules()
     DWORD needed;
     HANDLE proc = GetCurrentProcess();
     HMODULE mod[1024];
-    if( EnumProcessModules( proc, mod, sizeof( mod ), &needed ) != 0 )
+    if( TracyEnumProcessModules( proc, mod, sizeof( mod ), &needed ) != 0 )
     {
         const auto sz = needed / sizeof( HMODULE );
         for( size_t i=0; i<sz; i++ )
         {
             MODULEINFO info;
-            if( GetModuleInformation( proc, mod[i], &info, sizeof( info ) ) != 0 )
+            if( TracyGetModuleInformation( proc, mod[i], &info, sizeof( info ) ) != 0 )
             {
                 char name[1024];
-                const auto nameLength = GetModuleFileNameA( mod[i], name, 1021 );
+                const auto nameLength = TracyGetModuleFileNameA( mod[i], name, 1021 );
                 if( nameLength > 0 )
                 {
                     // This may be a new module loaded since our call to SymInitialize.
@@ -879,7 +950,7 @@ const char* DecodeCallstackPtrFast( uint64_t ptr )
 #ifdef TRACY_DBGHELP_LOCK
     DBGHELP_LOCK;
 #endif
-    if( SymFromAddr( proc, ptr, nullptr, si ) == 0 )
+    if( TracySymFromAddr( proc, ptr, nullptr, si ) == 0 )
     {
         *ret = '\0';
     }
@@ -931,13 +1002,13 @@ ModuleNameAndBaseAddress GetModuleNameAndPrepareSymbols( uint64_t addr )
     if( GetModuleHandleExA( flag, (char*)addr, &mod ) != 0 )
     {
         MODULEINFO info;
-        if( GetModuleInformation( proc, mod, &info, sizeof( info ) ) != 0 )
+        if( TracyGetModuleInformation( proc, mod, &info, sizeof( info ) ) != 0 )
         {
             const auto base = uint64_t( info.lpBaseOfDll );
             if( addr >= base && addr < ( base + info.SizeOfImage ) )
             {
                 char name[1024];
-                const auto nameLength = GetModuleFileNameA( mod, name, sizeof( name ) );
+                const auto nameLength = TracyGetModuleFileNameA( mod, name, sizeof( name ) );
                 if( nameLength > 0 )
                 {
                     // since this is the first time we encounter this module, load its symbols (needed for modules loaded after SymInitialize)
@@ -969,7 +1040,7 @@ CallstackSymbolData DecodeSymbolAddress( uint64_t ptr )
 #ifdef TRACY_DBGHELP_LOCK
     DBGHELP_LOCK;
 #endif
-    const auto res = SymGetLineFromAddr64( GetCurrentProcess(), ptr, &displacement, &line );
+    const auto res = TracySymGetLineFromAddr64( GetCurrentProcess(), ptr, &displacement, &line );
     if( res == 0 || line.LineNumber >= 0xF00000 )
     {
         sym.file = "[unknown]";
@@ -1049,7 +1120,8 @@ CallstackEntryData DecodeCallstackPtr( uint64_t ptr )
     si->SizeOfStruct = sizeof( SYMBOL_INFO );
     si->MaxNameLen = MaxNameSize;
 
-    const auto symValid = SymFromAddr( proc, ptr, nullptr, si ) != 0;
+    const auto symValid = TracySymFromAddr( proc, ptr, nullptr, si ) != 0;
+    // TODO: check symValid here to avoid calling SymGetLineFromAddr64 below unnecessarily
 
     IMAGEHLP_LINE64 line;
     DWORD displacement = 0;
@@ -1057,7 +1129,7 @@ CallstackEntryData DecodeCallstackPtr( uint64_t ptr )
 
     {
         const char* filename;
-        const auto res = SymGetLineFromAddr64( proc, ptr, &displacement, &line );
+        const auto res = TracySymGetLineFromAddr64( proc, ptr, &displacement, &line );
         if( res == 0 || line.LineNumber >= 0xF00000 )
         {
             filename = "[unknown]";
