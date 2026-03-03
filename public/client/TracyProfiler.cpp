@@ -3468,14 +3468,8 @@ bool Profiler::SendData( const char* data, size_t len )
         ZoneScopedNC("tracy::Profiler::SendData[compress]", tracy::Color::DarkGoldenrod4);
         return LZ4_compress_fast_continue( (LZ4_stream_t*)m_stream, data, m_lz4Buf + sizeof( lz4sz_t ), (int)len, LZ4Size, 1 );
     }();
-    bool status = [&]() {
-        ZoneScopedNC("tracy::Profiler::SendData[send]", tracy::Color::Crimson);
-        TracyAllocN( data, lz4sz, "Tracy Wire" );
-        memcpy( m_lz4Buf, &lz4sz, sizeof( lz4sz ) );
-        bool status = m_sock->Send( m_lz4Buf, lz4sz + sizeof( lz4sz_t ) ) != -1;
-        TracyFreeN( data, "Tracy Wire" );
-        return status;
-    }();
+    memcpy( m_lz4Buf, &lz4sz, sizeof( lz4sz ) );
+    bool status = m_sock->Send( m_lz4Buf, lz4sz + sizeof( lz4sz_t ) ) != -1;
     TracyFreeN( data, "Tracy Send" );
     return status;
 }

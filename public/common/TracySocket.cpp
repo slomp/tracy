@@ -10,6 +10,8 @@
 #include "TracySocket.hpp"
 #include "TracySystem.hpp"
 
+#include "../tracy/Tracy.hpp"
+
 #ifdef _WIN32
 #  ifndef NOMINMAX
 #    define NOMINMAX
@@ -292,13 +294,16 @@ void Socket::Close()
 
 int Socket::Send( const void* _buf, int len )
 {
+    ZoneScopedC(tracy::Color::Crimson);
     const auto sock = m_sock.load( std::memory_order_relaxed );
     auto buf = (const char*)_buf;
     assert( sock != -1 );
     auto start = buf;
     while( len > 0 )
     {
+        TracyAllocN( buf, len, "Tracy Wire OUT" );
         auto ret = send( sock, buf, len, MSG_NOSIGNAL );
+        TracyFreeN( buf, "Tracy Wire OUT" );
         if( ret == -1 ) return -1;
         len -= ret;
         buf += ret;
@@ -352,6 +357,8 @@ int Socket::RecvBuffered( void* buf, int len, int timeout )
 
 int Socket::Recv( void* _buf, int len, int timeout )
 {
+    ZoneScopedC(tracy::Color::Crimson);
+
     const auto sock = m_sock.load( std::memory_order_relaxed );
     auto buf = (char*)_buf;
 
@@ -361,7 +368,10 @@ int Socket::Recv( void* _buf, int len, int timeout )
 
     if( poll( &fd, 1, timeout ) > 0 )
     {
-        return recv( sock, buf, len, 0 );
+        TracyAllocN( buf, len, "Tracy Wire IN" );
+        int ret = recv( sock, buf, len, 0 );
+        TracyFreeN( buf, "Tracy Wire IN" );
+        return ret;
     }
     else
     {
