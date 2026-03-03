@@ -3754,6 +3754,7 @@ void Profiler::QueueSourceCodeQuery( uint32_t id )
 void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
 {
     ZoneScoped;
+    TracyPlot("Instrumentation Queue", int64_t(GetQueue().size_approx() + m_serialQueue.size()));
 
     switch( si.type )
     {
@@ -3923,6 +3924,7 @@ bool Profiler::HandleServerQuery()
     memcpy( &type, &payload.type, sizeof( payload.type ) );
     memcpy( &ptr, &payload.ptr, sizeof( payload.ptr ) );
 
+    ZoneValue(type);
     switch( type )
     {
     case ServerQueryString:
