@@ -28,6 +28,9 @@ SOFTWARE.
 #include <stdexcept>
 #include <type_traits> // std::enable_if, std::is_*_constructible
 
+#include <mutex>
+#include <condition_variable>
+
 #include "../common/TracyAlloc.hpp"
 
 #if defined (_MSC_VER)
@@ -119,6 +122,19 @@ public:
 
   size_t capacity() const noexcept { return capacity_ - 1; }
 
+  void notify() {
+      pending.notify_one();
+  }
+
+  void wait(int timeout_ms) {
+      timeout_ms = (timeout_ms > 0) ? timeout_ms : 1;
+      std::chrono::milliseconds timeout { timeout_ms };
+      std::unique_lock<std::mutex> lock (mtx);
+      pending.wait_for(lock, timeout, [this]() {
+          return !empty();
+      });
+  }
+
 private:
   static constexpr size_t kCacheLineSize = 64;
 
@@ -128,6 +144,8 @@ private:
 private:
   size_t capacity_;
   T *slots_;
+  std::mutex mtx;
+  std::condition_variable pending;
 
   // Align to cache line size in order to avoid false sharing
   // readIdxCache_ and writeIdxCache_ is used to reduce the amount of cache
