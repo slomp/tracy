@@ -295,6 +295,18 @@ void Socket::Close()
 int Socket::Send( const void* _buf, int len )
 {
     ZoneScopedC(tracy::Color::Crimson);
+
+    static std::atomic<uint64_t> byte_count = 0;
+    static auto tstart = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::high_resolution_clock::now() - tstart;
+    if (elapsed > std::chrono::seconds(1)) {
+        double rate = double(byte_count.load()) / std::chrono::duration<double>(elapsed).count();
+        TracyPlot("Tracy Wire OUT (MB/s)", rate / 1'000'000.0);
+        tstart = std::chrono::high_resolution_clock::now();
+        byte_count = 0;
+    }
+    byte_count += len;
+
     const auto sock = m_sock.load( std::memory_order_relaxed );
     auto buf = (const char*)_buf;
     assert( sock != -1 );

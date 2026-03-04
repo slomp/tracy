@@ -561,6 +561,7 @@ static ULONG EnableVSyncMonitoring( Session& session )
 
 static ULONG WINAPI OnBufferComplete( PEVENT_TRACE_LOGFILEA Buffer )
 {
+    ZoneScoped;
     if( Buffer->EventsLost > 0 )
     {
         char buffer[64] = {};

@@ -3476,6 +3476,8 @@ bool Profiler::SendData( const char* data, size_t len )
 
 void Profiler::SendString( uint64_t str, const char* ptr, size_t len, QueueType type )
 {
+    ZoneScoped;
+
     assert( type == QueueType::StringData ||
             type == QueueType::ThreadName ||
             type == QueueType::PlotName ||
@@ -3515,6 +3517,8 @@ void Profiler::SendSingleString8( const char* ptr, size_t len )
 
 void Profiler::SendSingleString16( const char* ptr, size_t len )
 {
+    ZoneScoped;
+
     QueueItem item;
     MemWrite( &item.hdr.type, QueueType::SingleStringData );
 
@@ -3547,6 +3551,8 @@ void Profiler::SendSecondString8( const char* ptr, size_t len )
 
 void Profiler::SendSecondString16( const char* ptr, size_t len )
 {
+    ZoneScoped;
+
     QueueItem item;
     MemWrite( &item.hdr.type, QueueType::SecondStringData );
 
@@ -3564,6 +3570,8 @@ void Profiler::SendSecondString16( const char* ptr, size_t len )
 
 void Profiler::SendLongString( uint64_t str, const char* ptr, size_t len, QueueType type )
 {
+    ZoneScoped;
+
     assert( type == QueueType::FrameImageData ||
             type == QueueType::SymbolCode ||
             type == QueueType::SourceCode );
@@ -3600,6 +3608,8 @@ void Profiler::SendSourceLocation( uint64_t ptr )
 
 void Profiler::SendSourceLocationPayload( uint64_t _ptr )
 {
+    ZoneScoped;
+
     auto ptr = (const char*)_ptr;
 
     QueueItem item;
@@ -3621,6 +3631,8 @@ void Profiler::SendSourceLocationPayload( uint64_t _ptr )
 
 void Profiler::SendCallstackPayload( uint64_t _ptr )
 {
+    ZoneScoped;
+
     auto ptr = (uintptr_t*)_ptr;
 
     QueueItem item;
@@ -3753,13 +3765,13 @@ void Profiler::QueueSourceCodeQuery( uint32_t id )
 #ifdef TRACY_HAS_CALLSTACK
 void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
 {
-    ZoneScoped;
     TracyPlot("Instrumentation Queue", int64_t(GetQueue().size_approx() + m_serialQueue.size()));
 
     switch( si.type )
     {
     case SymbolQueueItemType::CallstackFrame:
     {
+        ZoneScopedN("tracy::Profiler::HandleSymbolQueueItem::[CallstackFrame]");
         const auto frameData = DecodeCallstackPtr( si.ptr );
         auto data = tracy_malloc_fast( sizeof( CallstackEntry ) * frameData.size );
         memcpy( data, frameData.data, sizeof( CallstackEntry ) * frameData.size );
@@ -3773,6 +3785,7 @@ void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
     }
     case SymbolQueueItemType::SymbolQuery:
     {
+        ZoneScopedN("tracy::Profiler::HandleSymbolQueueItem::[SymbolQuery]");
 #ifdef __ANDROID__
         // On Android it's common for code to be in mappings that are only executable
         // but not readable.
@@ -3795,6 +3808,7 @@ void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
 #ifdef TRACY_HAS_SYSTEM_TRACING
     case SymbolQueueItemType::ExternalName:
     {
+        ZoneScopedN("tracy::Profiler::HandleSymbolQueueItem::[ExternalName]");
         const char* threadName;
         const char* name;
         SysTraceGetExternalName( si.ptr, threadName, name );
@@ -3808,6 +3822,7 @@ void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
 #endif
     case SymbolQueueItemType::KernelCode:
     {
+        ZoneScopedN("tracy::Profiler::HandleSymbolQueueItem::[KernelCode]");
 #ifdef _WIN32
         auto mod = GetKernelModulePath( si.ptr );
         if( mod )
@@ -3852,11 +3867,17 @@ void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
         break;
     }
     case SymbolQueueItemType::SourceCode:
+    {
+        ZoneScopedN("tracy::Profiler::HandleSymbolQueueItem::[SourceCode]");
         HandleSourceCodeQuery( (char*)si.ptr, (char*)si.extra, si.id );
         break;
+    }
     default:
+    {
+        ZoneScopedNC("tracy::Profiler::HandleSymbolQueueItem::[UNKNOWN]", tracy::Color::Crimson);
         assert( false );
         break;
+    }
     }
 }
 
