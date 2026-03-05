@@ -2541,6 +2541,10 @@ void Profiler::ClearSerial()
 
 Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
 {
+    auto num_events = int64_t(GetQueue().size_approx() + m_serialQueue.size());
+    if (num_events > 0)
+        TracyPlot("Instrumentation Queue", num_events);
+
     bool connectionLost = false;
     const auto sz = GetQueue().try_dequeue_bulk_single( token,
         [this, &connectionLost] ( const uint32_t& threadId )
@@ -3761,8 +3765,6 @@ void Profiler::QueueSourceCodeQuery( uint32_t id )
 #ifdef TRACY_HAS_CALLSTACK
 void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
 {
-    TracyPlot("Instrumentation Queue", int64_t(GetQueue().size_approx() + m_serialQueue.size()));
-
     switch( si.type )
     {
     case SymbolQueueItemType::CallstackFrame:
