@@ -59,6 +59,8 @@ enum ServerQuery : uint8_t
     ServerQueryDataTransferPart
 };
 
+constexpr int ServerQueryCount = (int)ServerQueryDataTransferPart + 1;
+
 struct ServerQueryPacket
 {
     ServerQuery type;

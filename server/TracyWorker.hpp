@@ -1,6 +1,7 @@
 #ifndef __TRACYWORKER_HPP__
 #define __TRACYWORKER_HPP__
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <limits>
@@ -415,12 +416,13 @@ private:
 
     struct MbpsBlock
     {
-        MbpsBlock() : mbps( 64 ), compRatio( 1.0 ), queue( 0 ), transferred( 0 ) {}
+        MbpsBlock() : mbps( 64 ), compRatio( 1.0 ), queue( 0 ), transferred( 0 ) { sendQueueByType.fill( 0 ); }
 
         std::shared_mutex lock;
         std::vector<float> mbps;
         float compRatio;
         size_t queue;
+        std::array<size_t, ServerQueryCount> sendQueueByType;
         uint64_t transferred;
     };
 
@@ -665,6 +667,7 @@ public:
     const std::vector<float>& GetMbpsData() const { return m_mbpsData.mbps; }
     float GetCompRatio() const { return m_mbpsData.compRatio; }
     size_t GetSendQueueSize() const { return m_mbpsData.queue; }
+    const std::array<size_t, ServerQueryCount>& GetSendQueueBreakdown() const { return m_mbpsData.sendQueueByType; }
     size_t GetSendInFlight() const { return m_serverQuerySpaceBase - m_serverQuerySpaceLeft; }
     uint64_t GetDataTransferred() const { return m_mbpsData.transferred; }
 

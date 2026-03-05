@@ -3,10 +3,35 @@
 #include "TracyPrint.hpp"
 #include "TracyTexture.hpp"
 #include "TracyView.hpp"
+#include "../../public/common/TracyProtocol.hpp"
 #include "../Fonts.hpp"
 
 namespace tracy
 {
+
+static const char* GetServerQueryTypeName( ServerQuery type )
+{
+    switch( type )
+    {
+    case ServerQueryTerminate:       return "Terminate";
+    case ServerQueryString:         return "String";
+    case ServerQueryThreadString:   return "Thread name";
+    case ServerQuerySourceLocation: return "Source location";
+    case ServerQueryPlotName:       return "Plot name";
+    case ServerQueryFrameName:      return "Frame name";
+    case ServerQueryParameter:      return "Parameter";
+    case ServerQueryFiberName:      return "Fiber name";
+    case ServerQueryExternalName:   return "External name";
+    case ServerQueryDisconnect:     return "Disconnect";
+    case ServerQueryCallstackFrame: return "Callstack frame";
+    case ServerQuerySymbol:         return "Symbol";
+    case ServerQuerySymbolCode:     return "Symbol code";
+    case ServerQuerySourceCode:     return "Source code";
+    case ServerQueryDataTransfer:   return "Data transfer";
+    case ServerQueryDataTransferPart: return "Data transfer (part)";
+    default: return "?";
+    }
+}
 
 constexpr size_t SendQueueEnableThreshold = 1000000;
 constexpr size_t SendQueueDisableThreshold = 500000;
@@ -18,6 +43,7 @@ bool View::DrawConnection()
     const auto ty = ImGui::GetTextLineHeight();
     const auto isConnected = m_worker.IsConnected();
     size_t sendQueue;
+    std::array<size_t, ServerQueryCount> sendQueueBreakdown;
 
     {
         std::shared_lock<std::shared_mutex> lock( m_worker.GetMbpsDataLock() );
@@ -46,7 +72,15 @@ bool View::DrawConnection()
         ImGui::Text( "%6.2f Mbps", mbps / m_worker.GetCompRatio() );
         TextFocused( "Data transferred:", MemSizeToString( m_worker.GetDataTransferred() ) );
         sendQueue = m_worker.GetSendQueueSize();
+        sendQueueBreakdown = m_worker.GetSendQueueBreakdown();
         TextFocused( "Query backlog:", RealToString( sendQueue ) );
+        for( int i = 0; i < ServerQueryCount; i++ )
+        {
+            if( sendQueueBreakdown[i] != 0 )
+            {
+                ImGui::Text( "  %s: %s", GetServerQueryTypeName( (ServerQuery)i ), RealToString( sendQueueBreakdown[i] ) );
+            }
+        }
     }
 
     if( !m_sendQueueWarning.enabled )

@@ -3,10 +3,35 @@
 #include "TracyPrint.hpp"
 #include "TracyTimelineItem.hpp"
 #include "TracyView.hpp"
+#include "../../public/common/TracyProtocol.hpp"
 #include "../Fonts.hpp"
 
 namespace tracy
 {
+
+static const char* GetServerQueryTypeName( ServerQuery type )
+{
+    switch( type )
+    {
+    case ServerQueryTerminate:       return "Terminate";
+    case ServerQueryString:         return "String";
+    case ServerQueryThreadString:   return "Thread name";
+    case ServerQuerySourceLocation: return "Source location";
+    case ServerQueryPlotName:       return "Plot name";
+    case ServerQueryFrameName:      return "Frame name";
+    case ServerQueryParameter:      return "Parameter";
+    case ServerQueryFiberName:      return "Fiber name";
+    case ServerQueryExternalName:   return "External name";
+    case ServerQueryDisconnect:     return "Disconnect";
+    case ServerQueryCallstackFrame: return "Callstack frame";
+    case ServerQuerySymbol:         return "Symbol";
+    case ServerQuerySymbolCode:     return "Symbol code";
+    case ServerQuerySourceCode:     return "Source code";
+    case ServerQueryDataTransfer:   return "Data transfer";
+    case ServerQueryDataTransferPart: return "Data transfer (part)";
+    default: return "?";
+    }
+}
 
 extern double s_time;
 
@@ -36,9 +61,11 @@ void View::DrawNotificationArea()
     if( m_worker.IsConnected() )
     {
         size_t sqs;
+        std::array<size_t, ServerQueryCount> sendQueueBreakdown;
         {
             std::shared_lock<std::shared_mutex> lock( m_worker.GetMbpsDataLock() );
             sqs = m_worker.GetSendQueueSize();
+            sendQueueBreakdown = m_worker.GetSendQueueBreakdown();
         }
         if( sqs != 0 )
         {
@@ -48,6 +75,13 @@ void View::DrawNotificationArea()
             {
                 ImGui::BeginTooltip();
                 TextFocused( "Query backlog:", RealToString( sqs ) );
+                for( int i = 0; i < ServerQueryCount; i++ )
+                {
+                    if( sendQueueBreakdown[i] != 0 )
+                    {
+                        ImGui::Text( "  %s: %s", GetServerQueryTypeName( (ServerQuery)i ), RealToString( sendQueueBreakdown[i] ) );
+                    }
+                }
                 ImGui::EndTooltip();
             }
         }

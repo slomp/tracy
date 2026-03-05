@@ -2988,6 +2988,17 @@ void Worker::UpdateMbps( int64_t td )
 {
     const auto bytes = m_bytes.exchange( 0, std::memory_order_relaxed );
     const auto decBytes = m_decBytes.exchange( 0, std::memory_order_relaxed );
+    std::array<size_t, ServerQueryCount> byType = {};
+    for( const auto& p : m_serverQueryQueuePrio )
+    {
+        const auto t = (int)p.type;
+        if( t >= 0 && t < ServerQueryCount ) byType[t]++;
+    }
+    for( const auto& p : m_serverQueryQueue )
+    {
+        const auto t = (int)p.type;
+        if( t >= 0 && t < ServerQueryCount ) byType[t]++;
+    }
     std::lock_guard<std::shared_mutex> lock( m_mbpsData.lock );
     if( td != 0 )
     {
@@ -2996,6 +3007,7 @@ void Worker::UpdateMbps( int64_t td )
     }
     m_mbpsData.compRatio = decBytes == 0 ? 1 : float( bytes ) / decBytes;
     m_mbpsData.queue = m_serverQueryQueue.size() + m_serverQueryQueuePrio.size();
+    m_mbpsData.sendQueueByType = byType;
     m_mbpsData.transferred += bytes;
 }
 
