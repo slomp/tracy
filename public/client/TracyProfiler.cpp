@@ -3665,8 +3665,6 @@ void Profiler::SendCallstackPayload( uint64_t _ptr )
 void Profiler::SendCallstackPayload64( uint64_t _ptr )
 {
     ZoneScoped;
-    TracyPlot("TracyCallstackPayload", int64_t(0));
-    TracyPlot("TracyCallstackPayload", int64_t(1));
     auto ptr = (uint64_t*)_ptr;
 
     QueueItem item;
@@ -3682,8 +3680,6 @@ void Profiler::SendCallstackPayload64( uint64_t _ptr )
     AppendDataUnsafe( &item, QueueDataSize[(int)QueueType::CallstackPayload] );
     AppendDataUnsafe( &l16, sizeof( l16 ) );
     AppendDataUnsafe( ptr, sizeof( uint64_t ) * sz );
-    TracyPlot("TracyCallstackPayload", int64_t(1));
-    TracyPlot("TracyCallstackPayload", int64_t(0));
 }
 
 void Profiler::SendCallstackAlloc( uint64_t _ptr )
