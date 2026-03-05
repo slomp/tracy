@@ -3466,15 +3466,12 @@ void Profiler::SafeCopyEpilog( char* buf )
 
 bool Profiler::SendData( const char* data, size_t len )
 {
-    ZoneScoped;
-    TracyAllocN( data, len, "Tracy Send" );
     const lz4sz_t lz4sz = [&]() {
         ZoneScopedNC("tracy::Profiler::SendData[compress]", tracy::Color::DarkGoldenrod4);
         return LZ4_compress_fast_continue( (LZ4_stream_t*)m_stream, data, m_lz4Buf + sizeof( lz4sz_t ), (int)len, LZ4Size, 1 );
     }();
     memcpy( m_lz4Buf, &lz4sz, sizeof( lz4sz ) );
     bool status = m_sock->Send( m_lz4Buf, lz4sz + sizeof( lz4sz_t ) ) != -1;
-    TracyFreeN( data, "Tracy Send" );
     return status;
 }
 
