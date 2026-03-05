@@ -4460,10 +4460,12 @@ void Profiler::HandleSymbolCodeQuery( uint64_t symbol, uint32_t size )
 #endif
     if( symbol >> 63 != 0 )
     {
+        ZoneScopedN("tracy::Profiler::HandleSymbolCodeQuery::[kernel]");
         QueueKernelCode( symbol, size );
     }
     else
     {
+        ZoneScopedN("tracy::Profiler::HandleSymbolCodeQuery::[user]");
         auto&& lambda = [ this, symbol ]( const char* buf, size_t size ) {
             SendLongString( symbol, buf, size, QueueType::SymbolCode );
         };
