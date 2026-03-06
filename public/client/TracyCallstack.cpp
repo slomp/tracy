@@ -712,6 +712,42 @@ DWORD TracyGetModuleFileNameA( HMODULE hModule, LPSTR lpFilename, DWORD nSize )
     return status;
 }
 
+DWORD TracySymAddrIncludeInlineTrace( HANDLE hProcess, DWORD64 Address )
+{
+    ZoneScoped;
+    DWORD status = _SymAddrIncludeInlineTrace( hProcess, Address );
+    if (status == 0)
+        SymError( "SymAddrIncludeInlineTrace", GetLastError() );
+    return status;
+}
+
+BOOL TracySymQueryInlineTrace( HANDLE hProcess, DWORD64 StartAddress, DWORD StartContext, DWORD64 StartRetAddress, DWORD64 CurAddress, LPDWORD CurContext, LPDWORD CurFrameIndex )
+{
+    ZoneScoped;
+    BOOL status = _SymQueryInlineTrace( hProcess, StartAddress, StartContext, StartRetAddress, CurAddress, CurContext, CurFrameIndex );
+    if( status == FALSE )
+        SymError( "SymQueryInlineTrace", GetLastError() );
+    return status;
+}
+
+BOOL TracySymFromInlineContext( HANDLE hProcess, DWORD64 Address, ULONG InlineContext, PDWORD64 Displacement, PSYMBOL_INFO Symbol )
+{
+    ZoneScoped;
+    BOOL status = _SymFromInlineContext( hProcess, Address, InlineContext, Displacement, Symbol );
+    if( status == FALSE )
+        SymError( "SymFromInlineContext", GetLastError() );
+    return status;
+}
+
+BOOL TracySymGetLineFromInlineContext( HANDLE hProcess, DWORD64 qwAddr, ULONG InlineContext, DWORD64 qwModuleBaseAddress, PDWORD pdwDisplacement, PIMAGEHLP_LINE64 Line64 )
+{
+    ZoneScoped;
+    BOOL status = _SymGetLineFromInlineContext( hProcess, qwAddr, InlineContext, qwModuleBaseAddress, pdwDisplacement, Line64 );
+    if( status == FALSE )
+        SymError( "SymGetLineFromInlineContext", GetLastError() );
+    return status;
+}
+
 void DbgHelpInit()
 {
     if( s_shouldResolveSymbolsOffline ) return;
@@ -1098,10 +1134,10 @@ CallstackEntryData DecodeCallstackPtr( uint64_t ptr )
     DWORD inlineNum = 0;
     if( _SymAddrIncludeInlineTrace )
     {
-        inlineNum = _SymAddrIncludeInlineTrace( proc, ptr );
+        inlineNum = TracySymAddrIncludeInlineTrace( proc, ptr );
         if( inlineNum > MaxCbTrace - 1 ) inlineNum = MaxCbTrace - 1;
         DWORD idx;
-        if( inlineNum != 0 ) doInline = _SymQueryInlineTrace( proc, ptr, 0, ptr, ptr, &ctx, &idx );
+        if( inlineNum != 0 ) doInline = TracySymQueryInlineTrace( proc, ptr, 0, ptr, ptr, &ctx, &idx );
     }
     if( doInline )
     {
@@ -1161,9 +1197,9 @@ CallstackEntryData DecodeCallstackPtr( uint64_t ptr )
         for( DWORD i=0; i<inlineNum; i++ )
         {
             auto& cb = cb_data[i];
-            const auto symInlineValid = _SymFromInlineContext( proc, ptr, ctx, nullptr, si ) != 0;
+            const auto symInlineValid = TracySymFromInlineContext( proc, ptr, ctx, nullptr, si ) != 0;
             const char* filename;
-            if( _SymGetLineFromInlineContext( proc, ptr, ctx, 0, &displacement, &line ) == 0 )
+            if( TracySymGetLineFromInlineContext( proc, ptr, ctx, 0, &displacement, &line ) == 0 )
             {
                 filename = "[unknown]";
                 cb.line = 0;
