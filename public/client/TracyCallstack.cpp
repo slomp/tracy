@@ -711,10 +711,9 @@ DWORD TracyGetModuleFileNameA( HMODULE hModule, LPSTR lpFilename, DWORD nSize )
 DWORD TracySymAddrIncludeInlineTrace( HANDLE hProcess, DWORD64 Address )
 {
     ZoneScoped;
-    DWORD status = _SymAddrIncludeInlineTrace( hProcess, Address );
-    if (status == 0)
-        SymError( "SymAddrIncludeInlineTrace", GetLastError() );
-    return status;
+    // returns the number of inline frames at the address (plus the source frame),
+    // or zero if no inline trace information is available for that address
+    return _SymAddrIncludeInlineTrace( hProcess, Address );
 }
 
 BOOL TracySymQueryInlineTrace( HANDLE hProcess, DWORD64 StartAddress, DWORD StartContext, DWORD64 StartRetAddress, DWORD64 CurAddress, LPDWORD CurContext, LPDWORD CurFrameIndex )
