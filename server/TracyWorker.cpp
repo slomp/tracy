@@ -58,6 +58,9 @@ constexpr size_t FileHeaderMagic = 5;
 static const int CurrentVersion = FileVersion( Version::Major, Version::Minor, Version::Patch );
 static const int MinSupportedVersion = FileVersion( 0, 9, 0 );
 
+// Cap in-flight symbol code queries so the send queue does not fill with them and block other query types.
+constexpr uint32_t MaxPendingSymbolCodeQueries = 512;
+
 
 static void UpdateLockCountLockable( LockMap& lockmap, size_t pos )
 {
@@ -6969,7 +6972,7 @@ void Worker::ProcessSymbolInformation( const QueueSymbolInformation& ev )
     sd.size.SetVal( it->second.size );
     m_data.symbolMap.emplace( ev.symAddr, sd );
 
-    if( m_codeTransfer && it->second.size > 0 && it->second.size <= 128*1024 )
+    if( m_codeTransfer && it->second.size > 0 && it->second.size <= 128*1024 && m_pendingSymbolCode < MaxPendingSymbolCodeQueries )
     {
         m_pendingSymbolCode++;
         Query( ServerQuerySymbolCode, ev.symAddr, it->second.size );
