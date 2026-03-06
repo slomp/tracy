@@ -253,6 +253,23 @@ static bool IsQueryPrio( ServerQuery type )
 }
 
 
+static int SendToClient( Socket& sock, const void* buf, int len )
+{
+    return sock.Send( buf, len );
+}
+
+static bool ReadFromClient( Socket& sock, void* buf, int len, int timeout )
+{
+    return sock.Read( buf, len, timeout );
+}
+
+template<typename ShouldExit>
+static bool ReadFromClient( Socket& sock, void* buf, int len, int timeout, ShouldExit exitCb )
+{
+    return sock.Read( buf, len, timeout, exitCb );
+}
+
+
 LoadProgress Worker::s_loadProgress;
 
 Worker::Worker( const char* addr, uint16_t port, int64_t memoryLimit )
@@ -2725,8 +2742,8 @@ void Worker::Network()
 
         auto buf = m_buffer + m_bufferOffset;
         lz4sz_t lz4sz;
-        if( !m_sock.Read( &lz4sz, sizeof( lz4sz ), 10, ShouldExit ) ) goto close;
-        if( !m_sock.Read( lz4buf.get(), lz4sz, 10, ShouldExit ) ) goto close;
+        if( !ReadFromClient( m_sock, &lz4sz, sizeof( lz4sz ), 10, ShouldExit ) ) goto close;
+        if( !ReadFromClient( m_sock, lz4buf.get(), lz4sz, 10, ShouldExit ) ) goto close;
         auto bb = m_bytes.load( std::memory_order_relaxed );
         m_bytes.store( bb + sizeof( lz4sz ) + lz4sz, std::memory_order_relaxed );
 
@@ -2764,11 +2781,11 @@ void Worker::Exec()
 
     std::chrono::time_point<std::chrono::high_resolution_clock> t0;
 
-    m_sock.Send( HandshakeShibboleth, HandshakeShibbolethSize );
+    SendToClient( m_sock, HandshakeShibboleth, HandshakeShibbolethSize );
     uint32_t protocolVersion = ProtocolVersion;
-    m_sock.Send( &protocolVersion, sizeof( protocolVersion ) );
+    SendToClient( m_sock, &protocolVersion, sizeof( protocolVersion ) );
     HandshakeStatus handshake;
-    if( !m_sock.Read( &handshake, sizeof( handshake ), 10, ShouldExit ) )
+    if( !ReadFromClient( m_sock, &handshake, sizeof( handshake ), 10, ShouldExit ) )
     {
         m_handshake.store( HandshakeDropped, std::memory_order_relaxed );
         goto close;
@@ -2797,7 +2814,7 @@ void Worker::Exec()
 
     {
         WelcomeMessage welcome;
-        if( !m_sock.Read( &welcome, sizeof( welcome ), 10, ShouldExit ) )
+        if( !ReadFromClient( m_sock, &welcome, sizeof( welcome ), 10, ShouldExit ) )
         {
             m_handshake.store( HandshakeDropped, std::memory_order_relaxed );
             goto close;
@@ -2838,7 +2855,7 @@ void Worker::Exec()
         if( m_onDemand )
         {
             OnDemandPayloadMessage onDemand;
-            if( !m_sock.Read( &onDemand, sizeof( onDemand ), 10, ShouldExit ) )
+            if( !ReadFromClient( m_sock, &onDemand, sizeof( onDemand ), 10, ShouldExit ) )
             {
                 m_handshake.store( HandshakeDropped, std::memory_order_relaxed );
                 goto close;
@@ -2911,7 +2928,7 @@ void Worker::Exec()
             if( m_serverQuerySpaceLeft > 0 && !m_serverQueryQueuePrio.empty() )
             {
                 const auto toSend = std::min( m_serverQuerySpaceLeft, m_serverQueryQueuePrio.size() );
-                m_sock.Send( m_serverQueryQueuePrio.data(), toSend * ServerQueryPacketSize );
+                SendToClient( m_sock, m_serverQueryQueuePrio.data(), (int)( toSend * ServerQueryPacketSize ) );
                 m_serverQuerySpaceLeft -= toSend;
                 if( toSend == m_serverQueryQueuePrio.size() )
                 {
@@ -2925,7 +2942,7 @@ void Worker::Exec()
             if( m_serverQuerySpaceLeft > 0 && !m_serverQueryQueue.empty() )
             {
                 const auto toSend = std::min( m_serverQuerySpaceLeft, m_serverQueryQueue.size() );
-                m_sock.Send( m_serverQueryQueue.data(), toSend * ServerQueryPacketSize );
+                SendToClient( m_sock, m_serverQueryQueue.data(), (int)( toSend * ServerQueryPacketSize ) );
                 m_serverQuerySpaceLeft -= toSend;
                 if( toSend == m_serverQueryQueue.size() )
                 {
@@ -3065,7 +3082,7 @@ void Worker::HandleFailure( const char* ptr, const char* end )
         if( m_serverQuerySpaceLeft > 0 && !m_serverQueryQueuePrio.empty() )
         {
             const auto toSend = std::min( m_serverQuerySpaceLeft, m_serverQueryQueuePrio.size() );
-            m_sock.Send( m_serverQueryQueuePrio.data(), toSend * ServerQueryPacketSize );
+            SendToClient( m_sock, m_serverQueryQueuePrio.data(), (int)( toSend * ServerQueryPacketSize ) );
             m_serverQuerySpaceLeft -= toSend;
             if( toSend == m_serverQueryQueuePrio.size() )
             {
@@ -3079,7 +3096,7 @@ void Worker::HandleFailure( const char* ptr, const char* end )
         if( m_serverQuerySpaceLeft > 0 && !m_serverQueryQueue.empty() )
         {
             const auto toSend = std::min( m_serverQuerySpaceLeft, m_serverQueryQueue.size() );
-            m_sock.Send( m_serverQueryQueue.data(), toSend * ServerQueryPacketSize );
+            SendToClient( m_sock, m_serverQueryQueue.data(), (int)( toSend * ServerQueryPacketSize ) );
             m_serverQuerySpaceLeft -= toSend;
             if( toSend == m_serverQueryQueue.size() )
             {
@@ -3234,7 +3251,7 @@ void Worker::Query( ServerQuery type, uint64_t data, uint32_t extra )
 void Worker::QueryTerminate()
 {
     ServerQueryPacket query { ServerQueryTerminate, 0, 0 };
-    m_sock.Send( &query, ServerQueryPacketSize );
+    SendToClient( m_sock, &query, (int)ServerQueryPacketSize );
 }
 
 void Worker::QuerySourceFile( const char* fn, const char* image )

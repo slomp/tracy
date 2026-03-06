@@ -3888,6 +3888,7 @@ void Profiler::SymbolWorker()
     InitCallstack();
     while( m_timeBegin.load( std::memory_order_relaxed ) == 0 ) std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
 
+    bool working = false;
     for(;;)
     {
         const auto shouldExit = ShouldExit();
@@ -3908,12 +3909,16 @@ void Profiler::SymbolWorker()
         auto si = m_symbolQueue.front();
         if( si )
         {
+            if (!working) { TracyPlot("TracyResolve", int64_t(0)); TracyPlot("TracyResolve", int64_t(1)); }
+            working = true;
             HandleSymbolQueueItem( *si );
             m_symbolQueue.pop();
         }
         else
         {
             ZoneScopedNC("tracy::Profiler::SymbolWorker[idle]", tracy::Color::DarkGray);
+            if (working) { TracyPlot("TracyResolve", int64_t(1)); TracyPlot("TracyResolve", int64_t(0)); }
+            working = false;
             if( shouldExit )
             {
                 s_symbolThreadGone.store( true, std::memory_order_release );

@@ -654,14 +654,10 @@ static void SymError( const char* function, DWORD code ) {
 
 static BOOL TracySymFromAddr( HANDLE hProcess, DWORD64 Address, PDWORD64 Displacement, PSYMBOL_INFO Symbol )
 {
-    TracyPlot("TracyResolve", int64_t(0));
-    TracyPlot("TracyResolve", int64_t(1));
     ZoneScoped;
     BOOL status = SymFromAddr( hProcess, Address, Displacement, Symbol );
     if( status == FALSE )
         SymError( "SymFromAddr", GetLastError() );
-    TracyPlot("TracyResolve", int64_t(1));
-    TracyPlot("TracyResolve", int64_t(0));
     return status;
 }
 
