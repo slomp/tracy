@@ -426,6 +426,18 @@ private:
         uint64_t transferred;
     };
 
+    struct ServerWorkStatsBlock
+    {
+        std::array<uint64_t, (size_t)QueueType::NUM_TYPES> totalTimeNs{};
+        std::array<uint64_t, (size_t)QueueType::NUM_TYPES> totalCalls{};
+        uint64_t totalIdleTimeNs = 0;
+        uint64_t idleCount = 0;
+        uint64_t totalMainThreadHandoffTimeNs = 0;
+        uint64_t mainThreadHandoffCount = 0;
+        uint64_t totalServerQuerySendTimeNs = 0;
+        uint64_t serverQuerySendCount = 0;
+    };
+
     struct FailureData
     {
         uint64_t thread;
@@ -670,6 +682,8 @@ public:
     const std::array<size_t, ServerQueryCount>& GetSendQueueBreakdown() const { return m_mbpsData.sendQueueByType; }
     size_t GetSendInFlight() const { return m_serverQuerySpaceBase - m_serverQuerySpaceLeft; }
     uint64_t GetDataTransferred() const { return m_mbpsData.transferred; }
+
+    void GetServerWorkStats( std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalTimeNs, std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalCalls, uint64_t& outTotalIdleTimeNs, uint64_t& outIdleCount, uint64_t& outTotalMainThreadHandoffTimeNs, uint64_t& outMainThreadHandoffCount, uint64_t& outTotalServerQuerySendTimeNs, uint64_t& outServerQuerySendCount );
 
     bool HasData() const { return m_hasData.load( std::memory_order_acquire ); }
     bool IsConnected() const { return m_connected.load( std::memory_order_relaxed ); }
