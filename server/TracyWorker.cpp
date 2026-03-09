@@ -58,8 +58,8 @@ constexpr size_t FileHeaderMagic = 5;
 static const int CurrentVersion = FileVersion( Version::Major, Version::Minor, Version::Patch );
 static const int MinSupportedVersion = FileVersion( 0, 9, 0 );
 
-// Cap in-flight symbol code queries so the send queue does not fill with them and block other query types.
-constexpr uint32_t MaxPendingSymbolCodeQueries = 512;
+constexpr uint32_t MaxPendingSymbolCodeQueries = std::numeric_limits<uint32_t>::max();  //512
+constexpr bool ResolveDisasembly = false;
 
 
 static void UpdateLockCountLockable( LockMap& lockmap, size_t pos )
@@ -4048,7 +4048,7 @@ void Worker::AddSymbolCode( uint64_t ptr, const char* data, size_t sz )
     cs_option( handle, CS_OPT_DETAIL, CS_OPT_ON );
     cs_insn* insn;
     size_t cnt = cs_disasm( handle, (const uint8_t*)code, sz, ptr, 0, &insn );
-    if( cnt > 0 )
+    if( ResolveDisasembly && cnt > 0 )
     {
         for( size_t i=0; i<cnt; i++ )
         {
