@@ -2782,6 +2782,8 @@ void Worker::Exec()
         std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
     }
 
+    m_sock.SetRecvBufSize( 32 * 1024 * 1024 );
+
     std::chrono::time_point<std::chrono::high_resolution_clock> t0;
 
     SendToClient( m_sock, HandshakeShibboleth, HandshakeShibbolethSize );

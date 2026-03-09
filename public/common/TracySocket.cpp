@@ -338,6 +338,19 @@ int Socket::GetSendBufSize()
     return bufSize;
 }
 
+void Socket::SetRecvBufSize( int size )
+{
+    const auto sock = m_sock.load( std::memory_order_relaxed );
+    if( sock == -1 ) return;
+#if defined _WIN32
+    int sz = sizeof( size );
+    setsockopt( (SOCKET)sock, SOL_SOCKET, SO_RCVBUF, (const char*)&size, sz );
+#else
+    socklen_t sz = sizeof( size );
+    setsockopt( sock, SOL_SOCKET, SO_RCVBUF, &size, sz );
+#endif
+}
+
 int Socket::RecvBuffered( void* buf, int len, int timeout )
 {
     if( len <= m_bufLeft )

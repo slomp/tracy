@@ -28,6 +28,7 @@ public:
 
     int Send( const void* buf, int len );
     int GetSendBufSize();
+    void SetRecvBufSize( int size );
 
     int ReadUpTo( void* buf, int len );
     bool Read( void* buf, int len, int timeout );
