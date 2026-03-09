@@ -2916,10 +2916,10 @@ void Worker::Exec()
                 // Wait for a millisecond maximum to avoid the opposite
                 // problem where main thread would never let us execute
 
-            m_data.lockCv.wait_for( lk, std::chrono::milliseconds( 1 ) );
-            uint64_t handoffNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - tHandoffStart ).count() );
-            m_serverWorkStats.totalMainThreadHandoffTimeNs += handoffNs;
-            m_serverWorkStats.mainThreadHandoffCount++;
+                m_data.lockCv.wait_for( lk, std::chrono::milliseconds( 1 ) );
+                uint64_t handoffNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - tHandoffStart ).count() );
+                m_serverWorkStats.totalMainThreadHandoffTimeNs += handoffNs;
+                m_serverWorkStats.mainThreadHandoffCount++;
             }
 
             while( ptr < end )
