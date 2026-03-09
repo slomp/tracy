@@ -685,6 +685,8 @@ public:
 
     void GetServerWorkStats( std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalTimeNs, std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalCalls, uint64_t& outTotalIdleTimeNs, uint64_t& outIdleCount, uint64_t& outTotalMainThreadHandoffTimeNs, uint64_t& outMainThreadHandoffCount, uint64_t& outTotalServerQuerySendTimeNs, uint64_t& outServerQuerySendCount );
 
+    int GetSocketRecvQueueBytes() const { return m_sock.GetRecvQueueBytes(); }
+
     bool HasData() const { return m_hasData.load( std::memory_order_acquire ); }
     bool IsConnected() const { return m_connected.load( std::memory_order_relaxed ); }
     bool IsDataStatic() const { return !m_thread.joinable(); }
@@ -1139,6 +1141,7 @@ private:
 
     DataBlock m_data;
     MbpsBlock m_mbpsData;
+    ServerWorkStatsBlock m_serverWorkStats;
 
     int m_traceVersion;
     std::atomic<uint8_t> m_handshake { 0 };

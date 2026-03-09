@@ -37,6 +37,7 @@
 #  include <netdb.h>
 #  include <unistd.h>
 #  include <poll.h>
+#  include <sys/ioctl.h>
 #endif
 
 #ifndef MSG_NOSIGNAL
@@ -348,6 +349,21 @@ void Socket::SetRecvBufSize( int size )
 #else
     socklen_t sz = sizeof( size );
     setsockopt( sock, SOL_SOCKET, SO_RCVBUF, &size, sz );
+#endif
+}
+
+int Socket::GetRecvQueueBytes() const
+{
+    const auto sock = m_sock.load( std::memory_order_relaxed );
+    if( sock == -1 ) return 0;
+#if defined _WIN32
+    u_long n = 0;
+    if( ioctlsocket( (SOCKET)sock, FIONREAD, &n ) != 0 ) return 0;
+    return (int)n;
+#else
+    int n = 0;
+    if( ioctl( sock, FIONREAD, &n ) != 0 ) return 0;
+    return n;
 #endif
 }
 
