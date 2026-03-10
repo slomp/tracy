@@ -2787,6 +2787,8 @@ void Worker::Exec()
 
     std::chrono::time_point<std::chrono::high_resolution_clock> t0;
 
+    FILE* hFile = fopen("tracy_server.log", "w");
+
     SendToClient( m_sock, HandshakeShibboleth, HandshakeShibbolethSize );
     uint32_t protocolVersion = ProtocolVersion;
     SendToClient( m_sock, &protocolVersion, sizeof( protocolVersion ) );
@@ -2884,6 +2886,10 @@ void Worker::Exec()
     }
 
     t0 = std::chrono::high_resolution_clock::now();
+    static uint32_t renderStarveScore = 0;
+    static float pendingReadScore = 0.0f;
+    static float pendingReadWeight = 4.0f;
+    static uint32_t handoffRng = 1;
 
     for(;;)
     {
@@ -2911,13 +2917,37 @@ void Worker::Exec()
         {
             const auto tHandoffStart = std::chrono::high_resolution_clock::now();
             std::unique_lock<std::mutex> lk( m_data.lock );
+            bool didHandoff = false;
             if( m_data.mainThreadWantsLock )
             {
-                // Hand over the lock to the main thread to avoid starving it.
-                // Wait for a millisecond maximum to avoid the opposite
-                // problem where main thread would never let us execute
+                const int pendingBytes = netbuf.size + GetSocketRecvQueueBytes();
+                const int recvBufSize = m_sock.GetRecvBufSize();
+                const float pending = (float)pendingBytes / (float)recvBufSize;
+                pendingReadScore += pending * pendingReadWeight;
 
-                m_data.lockCv.wait_for( lk, std::chrono::milliseconds( 1 ) );
+                handoffRng = handoffRng * 1103515245u + 12345u;
+                const float r = ( handoffRng >> 16 ) / 65536.0f;
+                const float handoffProb = ( 1.0f + renderStarveScore ) / ( 1.0f + renderStarveScore + pendingReadScore );
+                const bool doHandoff = ( r < handoffProb );
+
+                //fprintf(hFile, "doHandoff: %d, renderStarveScore: %d, pendingReadScore: %f, pendingReadWeight: %f, r: %f, handoffProb: %f\n", doHandoff, renderStarveScore, pendingReadScore, pendingReadWeight, r, handoffProb);
+
+                if( doHandoff )
+                {
+                    renderStarveScore = 0;
+                    pendingReadScore = 0.0f;
+                    pendingReadWeight = 4.0f;
+                    m_data.lockCv.wait( lk );
+                    didHandoff = true;
+                }
+                else
+                {
+                    renderStarveScore++;
+                    pendingReadWeight *= 0.95f;
+                }
+            }
+            if( didHandoff )
+            {
                 uint64_t handoffNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - tHandoffStart ).count() );
                 Worker::ServerWorkStatsBlock::Update(Worker::ServerWorkStatsBlock::ServerWorkerHandoff, handoffNs);
             }
@@ -3015,6 +3045,7 @@ void Worker::Exec()
     }
 
 close:
+    fclose(hFile);
     Shutdown();
     m_netWriteCv.notify_one();
     m_sock.Close();
