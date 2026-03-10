@@ -610,8 +610,8 @@ Socket* ListenSocket::Accept()
         setsockopt( sock, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof( val ) );
 #endif
 
-        int buffer_size = 32 * 1024 * 1024;
-        setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char*)&buffer_size, sizeof(buffer_size));
+        //int buffer_size = 32 * 1024 * 1024;
+        //setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char*)&buffer_size, sizeof(buffer_size));
 
         SetNoDelay( sock );
 
