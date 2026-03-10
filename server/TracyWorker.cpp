@@ -307,6 +307,7 @@ Worker::Worker( const char* addr, uint16_t port, int64_t memoryLimit )
     m_data.symbolSamplesReady = true;
 #endif
 
+    ServerWorkStatsBlock::Singleton() = {};
     m_thread = std::thread( [this] { SetThreadName( "Tracy Worker" ); Exec(); } );
     m_threadNet = std::thread( [this] { SetThreadName( "Tracy Network" ); Network(); } );
 }
@@ -2875,6 +2876,7 @@ void Worker::Exec()
 
     LZ4_setStreamDecode( (LZ4_streamDecode_t*)m_stream, nullptr, 0 );
     m_connected.store( true, std::memory_order_relaxed );
+    Worker::ServerWorkStatsBlock::Singleton().connectionActive = true;
     {
         std::lock_guard<std::mutex> lock( m_netWriteLock );
         m_netWriteCnt = 2;
@@ -3016,6 +3018,7 @@ close:
     Shutdown();
     m_netWriteCv.notify_one();
     m_sock.Close();
+    Worker::ServerWorkStatsBlock::Singleton().connectionActive = false;
     m_connected.store( false, std::memory_order_relaxed );
 }
 

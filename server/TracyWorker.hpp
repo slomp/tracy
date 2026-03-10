@@ -457,8 +457,9 @@ public:
             uint64_t totalTimeNs;
         };
         std::array<Entry, NUM_OPERATIONS> entries{};
+        bool connectionActive = false;
         Entry& operator [](int idx) { return entries[idx]; };
-        static Entry& Update(int idx, uint64_t dt, uint64_t k=1) { auto& entry = Singleton()[idx]; entry.totalTimeNs += dt; entry.count += k; return entry; };
+        static void Update(int idx, uint64_t dt, uint64_t k=1) { if( !Singleton().connectionActive ) return; auto& entry = Singleton()[idx]; entry.totalTimeNs += dt; entry.count += k; };
         static ServerWorkStatsBlock& Singleton() { static ServerWorkStatsBlock s; return s; }
     };
 
