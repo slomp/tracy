@@ -352,6 +352,22 @@ void Socket::SetRecvBufSize( int size )
 #endif
 }
 
+int Socket::GetRecvBufSize() const
+{
+    const auto sock = m_sock.load( std::memory_order_relaxed );
+    if( sock == -1 ) return 1;
+#if defined _WIN32
+    int bufSize = 1;
+    int sz = sizeof( bufSize );
+    getsockopt( (SOCKET)sock, SOL_SOCKET, SO_RCVBUF, (char*)&bufSize, &sz );
+#else
+    int bufSize = 1;
+    socklen_t sz = sizeof( bufSize );
+    getsockopt( sock, SOL_SOCKET, SO_RCVBUF, &bufSize, &sz );
+#endif
+    return bufSize > 0 ? bufSize : 1;
+}
+
 int Socket::GetRecvQueueBytes() const
 {
     const auto sock = m_sock.load( std::memory_order_relaxed );
