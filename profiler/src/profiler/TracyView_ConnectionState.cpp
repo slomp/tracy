@@ -369,6 +369,8 @@ bool View::DrawConnection()
     }
 
     FrameImage lastFrameImage{};
+    // opportunistic check before requesting the lock
+    if( m_worker.GetFrameCount( *m_frames ) > 1 )
     {
         Worker::MainThreadDataLockGuard lock = m_worker.ObtainLockForMainThread();
         const auto sz = m_worker.GetFrameCount( *m_frames );
@@ -381,7 +383,7 @@ bool View::DrawConnection()
             ImGui::Text( "%6.1f", fps );
             ImGui::SameLine();
             TextFocused( "Frame time:", TimeToString( dt ) );
-        }        
+        }
         const auto& fis = m_worker.GetFrameImages();
         // Keep a copy here since the worker may modify the frame images vector while we do not own the lock
         if( !fis.empty() ) lastFrameImage = *fis.back();
