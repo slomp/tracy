@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
@@ -426,18 +427,6 @@ private:
         uint64_t transferred;
     };
 
-    struct ServerWorkStatsBlock
-    {
-        std::array<uint64_t, (size_t)QueueType::NUM_TYPES> totalTimeNs{};
-        std::array<uint64_t, (size_t)QueueType::NUM_TYPES> totalCalls{};
-        uint64_t totalIdleTimeNs = 0;
-        uint64_t idleCount = 0;
-        uint64_t totalMainThreadHandoffTimeNs = 0;
-        uint64_t mainThreadHandoffCount = 0;
-        uint64_t totalServerQuerySendTimeNs = 0;
-        uint64_t serverQuerySendCount = 0;
-    };
-
     struct FailureData
     {
         uint64_t thread;
@@ -453,6 +442,26 @@ private:
     };
 
 public:
+    struct ServerWorkStatsBlock
+    {
+        enum Operation {
+            NUM_QUEUE_TYPES = QueueType::NUM_TYPES,
+            ServerWorkerIdle,
+            ServerWorkerHandoff,
+            ServerWorkerQuerySend,
+            MainThreadDataLock,
+            NUM_OPERATIONS
+        };
+        struct Entry {
+            uint64_t count;
+            uint64_t totalTimeNs;
+        };
+        std::array<Entry, NUM_OPERATIONS> entries{};
+        Entry& operator [](int idx) { return entries[idx]; };
+        static Entry& Update(int idx, uint64_t dt, uint64_t k=1) { auto& entry = Singleton()[idx]; entry.totalTimeNs += dt; entry.count += k; return entry; };
+        static ServerWorkStatsBlock& Singleton() { static ServerWorkStatsBlock s; return s; }
+    };
+
     enum class Failure
     {
         None,
@@ -500,20 +509,24 @@ public:
     // can acquire the lock promptly, especially during critical phases like initialization.
     struct MainThreadDataLockGuard
     {
-        MainThreadDataLockGuard( DataBlock& m_data )
-            : m_data( m_data )
+        MainThreadDataLockGuard( DataBlock& data )
+            : m_data( data )
         {
             m_data.mainThreadWantsLock = true;
             m_data.lock.lock();
+            m_lockStart = std::chrono::high_resolution_clock::now();
         }
         ~MainThreadDataLockGuard()
         {
             m_data.mainThreadWantsLock = false;
             m_data.lock.unlock();
             m_data.lockCv.notify_one();
+            const auto lockNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - m_lockStart ).count() );
+            ServerWorkStatsBlock::Update(ServerWorkStatsBlock::MainThreadDataLock, lockNs);
         }
     private:
         DataBlock& m_data;
+        std::chrono::high_resolution_clock::time_point m_lockStart;
     };
     MainThreadDataLockGuard ObtainLockForMainThread() { return { m_data }; }
 
@@ -682,8 +695,6 @@ public:
     const std::array<size_t, ServerQueryCount>& GetSendQueueBreakdown() const { return m_mbpsData.sendQueueByType; }
     size_t GetSendInFlight() const { return m_serverQuerySpaceBase - m_serverQuerySpaceLeft; }
     uint64_t GetDataTransferred() const { return m_mbpsData.transferred; }
-
-    void GetServerWorkStats( std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalTimeNs, std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalCalls, uint64_t& outTotalIdleTimeNs, uint64_t& outIdleCount, uint64_t& outTotalMainThreadHandoffTimeNs, uint64_t& outMainThreadHandoffCount, uint64_t& outTotalServerQuerySendTimeNs, uint64_t& outServerQuerySendCount );
 
     int GetSocketRecvQueueBytes() const { return m_sock.GetRecvQueueBytes(); }
 
@@ -1141,7 +1152,6 @@ private:
 
     DataBlock m_data;
     MbpsBlock m_mbpsData;
-    ServerWorkStatsBlock m_serverWorkStats;
 
     int m_traceVersion;
     std::atomic<uint8_t> m_handshake { 0 };

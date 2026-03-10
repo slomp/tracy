@@ -2899,8 +2899,7 @@ void Worker::Exec()
             netbuf = m_netRead.front();
             m_netRead.erase( m_netRead.begin() );
             uint64_t idleNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - tIdleStart ).count() );
-            m_serverWorkStats.totalIdleTimeNs += idleNs;
-            m_serverWorkStats.idleCount++;
+            Worker::ServerWorkStatsBlock::Update(Worker::ServerWorkStatsBlock::ServerWorkerIdle, idleNs);
         }
         if( netbuf.bufferOffset < 0 ) goto close;
 
@@ -2918,8 +2917,7 @@ void Worker::Exec()
 
                 m_data.lockCv.wait_for( lk, std::chrono::milliseconds( 1 ) );
                 uint64_t handoffNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - tHandoffStart ).count() );
-                m_serverWorkStats.totalMainThreadHandoffTimeNs += handoffNs;
-                m_serverWorkStats.mainThreadHandoffCount++;
+                Worker::ServerWorkStatsBlock::Update(Worker::ServerWorkStatsBlock::ServerWorkerHandoff, handoffNs);
             }
 
             while( ptr < end )
@@ -2954,8 +2952,7 @@ void Worker::Exec()
                     m_serverQueryQueuePrio.erase( m_serverQueryQueuePrio.begin(), m_serverQueryQueuePrio.begin() + toSend );
                 }
                 uint64_t sendNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - tSendStart ).count() );
-                m_serverWorkStats.totalServerQuerySendTimeNs += sendNs;
-                m_serverWorkStats.serverQuerySendCount++;
+                Worker::ServerWorkStatsBlock::Update(Worker::ServerWorkStatsBlock::ServerWorkerQuerySend, sendNs);
             }
             if( m_serverQuerySpaceLeft > 0 && !m_serverQueryQueue.empty() )
             {
@@ -2972,8 +2969,7 @@ void Worker::Exec()
                     m_serverQueryQueue.erase( m_serverQueryQueue.begin(), m_serverQueryQueue.begin() + toSend );
                 }
                 uint64_t sendNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now() - tSendStart ).count() );
-                m_serverWorkStats.totalServerQuerySendTimeNs += sendNs;
-                m_serverWorkStats.serverQuerySendCount++;
+                Worker::ServerWorkStatsBlock::Update(Worker::ServerWorkStatsBlock::ServerWorkerQuerySend, sendNs);
             }
         }
 
@@ -3050,17 +3046,6 @@ void Worker::UpdateMbps( int64_t td )
     m_mbpsData.transferred += bytes;
 }
 
-void Worker::GetServerWorkStats( std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalTimeNs, std::array<uint64_t, (size_t)QueueType::NUM_TYPES>& outTotalCalls, uint64_t& outTotalIdleTimeNs, uint64_t& outIdleCount, uint64_t& outTotalMainThreadHandoffTimeNs, uint64_t& outMainThreadHandoffCount, uint64_t& outTotalServerQuerySendTimeNs, uint64_t& outServerQuerySendCount )
-{
-    outTotalTimeNs = m_serverWorkStats.totalTimeNs;
-    outTotalCalls = m_serverWorkStats.totalCalls;
-    outTotalIdleTimeNs = m_serverWorkStats.totalIdleTimeNs;
-    outIdleCount = m_serverWorkStats.idleCount;
-    outTotalMainThreadHandoffTimeNs = m_serverWorkStats.totalMainThreadHandoffTimeNs;
-    outMainThreadHandoffCount = m_serverWorkStats.mainThreadHandoffCount;
-    outTotalServerQuerySendTimeNs = m_serverWorkStats.totalServerQuerySendTimeNs;
-    outServerQuerySendCount = m_serverWorkStats.serverQuerySendCount;
-}
 
 bool Worker::IsFailureThreadStringRetrieved()
 {
@@ -3469,8 +3454,7 @@ bool Worker::DispatchProcess( const QueueItem& ev, const char*& ptr )
     const auto typeIdx = (size_t)ev.hdr.type;
     if( typeIdx < (size_t)QueueType::NUM_TYPES )
     {
-        m_serverWorkStats.totalCalls[typeIdx]++;
-        m_serverWorkStats.totalTimeNs[typeIdx] += elapsedNs;
+        Worker::ServerWorkStatsBlock::Update(typeIdx, elapsedNs);
     }
 
     return ret;

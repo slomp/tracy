@@ -236,11 +236,7 @@ bool View::DrawConnection()
 
     if( ImGui::CollapsingHeader( "Server work breakdown", ImGuiTreeNodeFlags_DefaultOpen ) )
     {
-        std::array<uint64_t, (size_t)QueueType::NUM_TYPES> totalTimeNs, totalCalls;
-        uint64_t totalIdleTimeNs = 0, idleCount = 0;
-        uint64_t totalMainThreadHandoffTimeNs = 0, mainThreadHandoffCount = 0;
-        uint64_t totalServerQuerySendTimeNs = 0, serverQuerySendCount = 0;
-        m_worker.GetServerWorkStats( totalTimeNs, totalCalls, totalIdleTimeNs, idleCount, totalMainThreadHandoffTimeNs, mainThreadHandoffCount, totalServerQuerySendTimeNs, serverQuerySendCount );
+        auto& stats = Worker::ServerWorkStatsBlock::Singleton();
         const float tableWidth = 450.f * scale;
         const float tableHeight = 200.f * scale;
         if( ImGui::BeginChild( "##serverworkscroll", ImVec2( tableWidth, tableHeight ), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_AlwaysVerticalScrollbar ) )
@@ -252,57 +248,86 @@ bool View::DrawConnection()
                 ImGui::TableSetupColumn( "Calls", ImGuiTableColumnFlags_WidthFixed, 80 * scale );
                 ImGui::TableSetupColumn( "Mean/call", ImGuiTableColumnFlags_WidthFixed, 80 * scale );
                 ImGui::TableHeadersRow();
+                uint64_t queueTotalTimeNs = 0;
                 for( size_t i = 0; i < (size_t)QueueType::NUM_TYPES; i++ )
                 {
-                    if( totalCalls[i] == 0 ) continue;
+                    if( stats[i].count == 0 ) continue;
+                    queueTotalTimeNs += stats[i].totalTimeNs;
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted( GetQueueTypeName( (QueueType)i ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( (int64_t)totalTimeNs[i] ) );
+                    ImGui::Text( "%s", TimeToString( (int64_t)stats[i].totalTimeNs ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", RealToString( totalCalls[i] ) );
+                    ImGui::Text( "%s", RealToString( stats[i].count ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( totalCalls[i] ? (int64_t)( totalTimeNs[i] / totalCalls[i] ) : 0 ) );
+                    ImGui::Text( "%s", TimeToString( stats[i].count ? (int64_t)( stats[i].totalTimeNs / stats[i].count ) : 0 ) );
                 }
-                if( idleCount > 0 )
+                if( queueTotalTimeNs > 0 )
                 {
                     ImGui::TableNextRow();
                     ImGui::TableSetBgColor( ImGuiTableBgTarget_RowBg0, 0xFF404040 );
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted( "Idle" );
+                    ImGui::TextUnformatted( "Server Worker: Busy" );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( (int64_t)totalIdleTimeNs ) );
+                    ImGui::Text( "%s", TimeToString( (int64_t)queueTotalTimeNs ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", RealToString( idleCount ) );
+                    ImGui::TextUnformatted( "N/A" );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( (int64_t)( totalIdleTimeNs / idleCount ) ) );
+                    ImGui::TextUnformatted( "N/A" );
                 }
-                if( mainThreadHandoffCount > 0 )
+                using Op = Worker::ServerWorkStatsBlock::Operation;
+                if( stats[Op::ServerWorkerIdle].count > 0 )
                 {
                     ImGui::TableNextRow();
                     ImGui::TableSetBgColor( ImGuiTableBgTarget_RowBg0, 0xFF404040 );
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted( "Main thread handoff" );
+                    ImGui::TextUnformatted( "Server Worker: Idle" );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( (int64_t)totalMainThreadHandoffTimeNs ) );
+                    ImGui::Text( "%s", TimeToString( (int64_t)stats[Op::ServerWorkerIdle].totalTimeNs ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", RealToString( mainThreadHandoffCount ) );
+                    ImGui::Text( "%s", RealToString( stats[Op::ServerWorkerIdle].count ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( (int64_t)( totalMainThreadHandoffTimeNs / mainThreadHandoffCount ) ) );
+                    ImGui::Text( "%s", TimeToString( (int64_t)( stats[Op::ServerWorkerIdle].totalTimeNs / stats[Op::ServerWorkerIdle].count ) ) );
                 }
-                if( serverQuerySendCount > 0 )
+                if( stats[Op::ServerWorkerHandoff].count > 0 )
                 {
                     ImGui::TableNextRow();
                     ImGui::TableSetBgColor( ImGuiTableBgTarget_RowBg0, 0xFF404040 );
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted( "Server query send" );
+                    ImGui::TextUnformatted( "Server Worker: Handoff" );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( (int64_t)totalServerQuerySendTimeNs ) );
+                    ImGui::Text( "%s", TimeToString( (int64_t)stats[Op::ServerWorkerHandoff].totalTimeNs ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", RealToString( serverQuerySendCount ) );
+                    ImGui::Text( "%s", RealToString( stats[Op::ServerWorkerHandoff].count ) );
                     ImGui::TableNextColumn();
-                    ImGui::Text( "%s", TimeToString( (int64_t)( totalServerQuerySendTimeNs / serverQuerySendCount ) ) );
+                    ImGui::Text( "%s", TimeToString( (int64_t)( stats[Op::ServerWorkerHandoff].totalTimeNs / stats[Op::ServerWorkerHandoff].count ) ) );
+                }
+                if( stats[Op::ServerWorkerQuerySend].count > 0 )
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetBgColor( ImGuiTableBgTarget_RowBg0, 0xFF404040 );
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted( "Server Worker: Query Send" );
+                    ImGui::TableNextColumn();
+                    ImGui::Text( "%s", TimeToString( (int64_t)stats[Op::ServerWorkerQuerySend].totalTimeNs ) );
+                    ImGui::TableNextColumn();
+                    ImGui::Text( "%s", RealToString( stats[Op::ServerWorkerQuerySend].count ) );
+                    ImGui::TableNextColumn();
+                    ImGui::Text( "%s", TimeToString( (int64_t)( stats[Op::ServerWorkerQuerySend].totalTimeNs / stats[Op::ServerWorkerQuerySend].count ) ) );
+                }
+                if( stats[Op::MainThreadDataLock].count > 0 )
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetBgColor( ImGuiTableBgTarget_RowBg0, 0xFF404040 );
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted( "Main Thread: Data Lock" );
+                    ImGui::TableNextColumn();
+                    ImGui::Text( "%s", TimeToString( (int64_t)stats[Op::MainThreadDataLock].totalTimeNs ) );
+                    ImGui::TableNextColumn();
+                    ImGui::Text( "%s", RealToString( stats[Op::MainThreadDataLock].count ) );
+                    ImGui::TableNextColumn();
+                    ImGui::Text( "%s", TimeToString( (int64_t)( stats[Op::MainThreadDataLock].totalTimeNs / stats[Op::MainThreadDataLock].count ) ) );
                 }
                 ImGui::EndTable();
             }
