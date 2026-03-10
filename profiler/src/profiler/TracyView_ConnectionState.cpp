@@ -199,6 +199,9 @@ bool View::DrawConnection()
         ImGui::Text( "%6.2f Mbps", mbps / m_worker.GetCompRatio() );
         TextFocused( "Data transferred:", MemSizeToString( m_worker.GetDataTransferred() ) );
         sendQueue = m_worker.GetSendQueueSize();
+        TextFocused( "Query backlog:", RealToString( sendQueue ) );
+        ImGui::SameLine();
+        TextFocused( "+", RealToString( m_worker.GetSendInFlight() ) );
         sendQueueBreakdown = m_worker.GetSendQueueBreakdown();
     }
 
@@ -368,8 +371,6 @@ bool View::DrawConnection()
     FrameImage lastFrameImage{};
     {
         Worker::MainThreadDataLockGuard lock = m_worker.ObtainLockForMainThread();
-        ImGui::SameLine();
-        TextFocused( "+", RealToString( m_worker.GetSendInFlight() ) );
         const auto sz = m_worker.GetFrameCount( *m_frames );
         if( sz > 1 )
         {
